@@ -20,8 +20,10 @@ pub enum IntermediateFileType {
     CompileArtifacts,
     /// Guard-related data including dynamo_cpp_guards_str
     Guards,
-    /// Compilation metrics and stacks
+    /// Compilation metrics (success/failure data)
     CompilationMetrics,
+    /// Stack traces and dynamo_start (for StackTrieModule)
+    Stacks,
     /// Chromium trace events
     ChromiumEvents,
     /// Tensor metadata for debugging
@@ -38,6 +40,7 @@ impl IntermediateFileType {
             IntermediateFileType::CompileArtifacts => "compile_artifacts.jsonl",
             IntermediateFileType::Guards => "guards.jsonl",
             IntermediateFileType::CompilationMetrics => "compilation_metrics.jsonl",
+            IntermediateFileType::Stacks => "stacks.jsonl",
             IntermediateFileType::ChromiumEvents => "chromium_events.json",
             IntermediateFileType::TensorMetadata => "tensor_metadata.jsonl",
             IntermediateFileType::Export => "export.jsonl",
@@ -50,6 +53,7 @@ impl IntermediateFileType {
             IntermediateFileType::CompileArtifacts,
             IntermediateFileType::Guards,
             IntermediateFileType::CompilationMetrics,
+            IntermediateFileType::Stacks,
             IntermediateFileType::ChromiumEvents,
             IntermediateFileType::TensorMetadata,
             IntermediateFileType::Export,
@@ -90,12 +94,15 @@ pub fn envelope_type_to_file(envelope_type: &str) -> Option<IntermediateFileType
         | "create_unbacked_symbol"
         | "expression_created" => Some(IntermediateFileType::Guards),
 
-        // Compilation metrics (includes stacks)
+        // Compilation metrics (success/failure data only)
         "compilation_metrics"
         | "bwd_compilation_metrics"
-        | "aot_autograd_backward_compilation_metrics"
-        | "dynamo_start"
-        | "stack" => Some(IntermediateFileType::CompilationMetrics),
+        | "aot_autograd_backward_compilation_metrics" => {
+            Some(IntermediateFileType::CompilationMetrics)
+        }
+
+        // Stacks (for StackTrieModule)
+        "dynamo_start" | "stack" => Some(IntermediateFileType::Stacks),
 
         // Chromium events
         "chromium_event" => Some(IntermediateFileType::ChromiumEvents),
@@ -593,6 +600,16 @@ mod tests {
         assert_eq!(
             envelope_type_to_file("compilation_metrics"),
             Some(IntermediateFileType::CompilationMetrics)
+        );
+
+        // Stacks (separate from compilation metrics)
+        assert_eq!(
+            envelope_type_to_file("dynamo_start"),
+            Some(IntermediateFileType::Stacks)
+        );
+        assert_eq!(
+            envelope_type_to_file("stack"),
+            Some(IntermediateFileType::Stacks)
         );
 
         // Other types
