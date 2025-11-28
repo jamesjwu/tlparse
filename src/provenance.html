@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inductor Provenance Tracking Highlighter</title>
+    <style>
+        {css | format_unescaped}
+    </style>
+</head>
+
+<body>
+    <div class="editor-container">
+        <div id="preGradGraph" class="editor">
+            <pre>{pre_grad_graph_content}</pre>
+        </div>
+        <div id="divider1" class="divider"></div>
+        <div id="postGradGraph" class="editor">
+            <pre>{post_grad_graph_content}</pre>
+        </div>
+        <div id="divider2" class="divider"></div>
+        <div id="generatedCode" class="editor">
+            <pre>{output_code_content | format_unescaped}{aot_code_content}</pre>
+        </div>
+    </div>
+
+    <!-- Line mappings data for JavaScript -->
+    <script id="lineMappings" type="application/json">
+        {line_mappings_content | format_unescaped}
+    </script>
+
+    <script>
+        {js | format_unescaped}
+    </script>
+</body>
+
+</html>
