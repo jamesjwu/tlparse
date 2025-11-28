@@ -16,40 +16,44 @@ use crate::types::{CompileId, Envelope};
 /// Categories of intermediate files
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntermediateFileType {
-    Graphs,
-    Codegen,
+    /// Graphs, codegen, and generic artifacts (one file for CompileArtifactsModule)
+    CompileArtifacts,
+    /// Guard-related data including dynamo_cpp_guards_str
     Guards,
+    /// Compilation metrics and stacks
     CompilationMetrics,
+    /// Chromium trace events
     ChromiumEvents,
-    Artifacts,
+    /// Tensor metadata for debugging
     TensorMetadata,
+    /// Export-specific data
     Export,
+    /// Cache hit/miss/bypass artifacts (separate from compile artifacts)
+    Cache,
 }
 
 impl IntermediateFileType {
     pub fn filename(&self) -> &'static str {
         match self {
-            IntermediateFileType::Graphs => "graphs.jsonl",
-            IntermediateFileType::Codegen => "codegen.jsonl",
+            IntermediateFileType::CompileArtifacts => "compile_artifacts.jsonl",
             IntermediateFileType::Guards => "guards.jsonl",
             IntermediateFileType::CompilationMetrics => "compilation_metrics.jsonl",
             IntermediateFileType::ChromiumEvents => "chromium_events.json",
-            IntermediateFileType::Artifacts => "artifacts.jsonl",
             IntermediateFileType::TensorMetadata => "tensor_metadata.jsonl",
             IntermediateFileType::Export => "export.jsonl",
+            IntermediateFileType::Cache => "cache.jsonl",
         }
     }
 
     pub fn all() -> &'static [IntermediateFileType] {
         &[
-            IntermediateFileType::Graphs,
-            IntermediateFileType::Codegen,
+            IntermediateFileType::CompileArtifacts,
             IntermediateFileType::Guards,
             IntermediateFileType::CompilationMetrics,
             IntermediateFileType::ChromiumEvents,
-            IntermediateFileType::Artifacts,
             IntermediateFileType::TensorMetadata,
             IntermediateFileType::Export,
+            IntermediateFileType::Cache,
         ]
     }
 }
@@ -57,7 +61,7 @@ impl IntermediateFileType {
 /// Determines which intermediate file an envelope type belongs to
 pub fn envelope_type_to_file(envelope_type: &str) -> Option<IntermediateFileType> {
     match envelope_type {
-        // Graphs
+        // Compile artifacts: graphs, codegen, and generic artifacts
         "dynamo_output_graph"
         | "optimize_ddp_split_graph"
         | "optimize_ddp_split_child"
@@ -68,13 +72,17 @@ pub fn envelope_type_to_file(envelope_type: &str) -> Option<IntermediateFileType
         | "aot_joint_graph"
         | "inductor_pre_grad_graph"
         | "inductor_post_grad_graph"
-        | "graph_dump" => Some(IntermediateFileType::Graphs),
+        | "graph_dump"
+        | "inductor_output_code"
+        | "dump_file"
+        | "link" => Some(IntermediateFileType::CompileArtifacts),
 
-        // Codegen
-        "inductor_output_code" | "dynamo_cpp_guards_str" => Some(IntermediateFileType::Codegen),
+        // Generic artifact needs special handling - cache artifacts go to Cache file
+        "artifact" => None, // Handled specially by route_artifact()
 
-        // Guards (includes symbolic shapes)
+        // Guards (includes dynamo_cpp_guards_str and symbolic shapes)
         "dynamo_guards"
+        | "dynamo_cpp_guards_str"
         | "symbolic_shape_specialization"
         | "guard_added_fast"
         | "propagate_real_tensors_provenance"
@@ -92,9 +100,6 @@ pub fn envelope_type_to_file(envelope_type: &str) -> Option<IntermediateFileType
         // Chromium events
         "chromium_event" => Some(IntermediateFileType::ChromiumEvents),
 
-        // Artifacts
-        "artifact" | "dump_file" | "link" => Some(IntermediateFileType::Artifacts),
-
         // Tensor metadata
         "describe_tensor" | "describe_storage" | "describe_source" => {
             Some(IntermediateFileType::TensorMetadata)
@@ -110,6 +115,18 @@ pub fn envelope_type_to_file(envelope_type: &str) -> Option<IntermediateFileType
 
         // Unknown types - skip
         _ => None,
+    }
+}
+
+/// Route an artifact to the appropriate file based on its name
+pub fn route_artifact(artifact_name: &str) -> IntermediateFileType {
+    if artifact_name.contains("cache_hit")
+        || artifact_name.contains("cache_miss")
+        || artifact_name.contains("cache_bypass")
+    {
+        IntermediateFileType::Cache
+    } else {
+        IntermediateFileType::CompileArtifacts
     }
 }
 
@@ -540,33 +557,48 @@ mod tests {
 
     #[test]
     fn test_envelope_type_routing() {
+        // Compile artifacts (graphs, codegen, generic artifacts)
         assert_eq!(
             envelope_type_to_file("dynamo_output_graph"),
-            Some(IntermediateFileType::Graphs)
+            Some(IntermediateFileType::CompileArtifacts)
         );
         assert_eq!(
             envelope_type_to_file("aot_forward_graph"),
-            Some(IntermediateFileType::Graphs)
+            Some(IntermediateFileType::CompileArtifacts)
         );
         assert_eq!(
             envelope_type_to_file("inductor_output_code"),
-            Some(IntermediateFileType::Codegen)
+            Some(IntermediateFileType::CompileArtifacts)
         );
+        assert_eq!(
+            envelope_type_to_file("dump_file"),
+            Some(IntermediateFileType::CompileArtifacts)
+        );
+        assert_eq!(
+            envelope_type_to_file("link"),
+            Some(IntermediateFileType::CompileArtifacts)
+        );
+
+        // Guards (includes dynamo_cpp_guards_str)
         assert_eq!(
             envelope_type_to_file("dynamo_guards"),
             Some(IntermediateFileType::Guards)
         );
         assert_eq!(
+            envelope_type_to_file("dynamo_cpp_guards_str"),
+            Some(IntermediateFileType::Guards)
+        );
+
+        // Compilation metrics
+        assert_eq!(
             envelope_type_to_file("compilation_metrics"),
             Some(IntermediateFileType::CompilationMetrics)
         );
+
+        // Other types
         assert_eq!(
             envelope_type_to_file("chromium_event"),
             Some(IntermediateFileType::ChromiumEvents)
-        );
-        assert_eq!(
-            envelope_type_to_file("artifact"),
-            Some(IntermediateFileType::Artifacts)
         );
         assert_eq!(
             envelope_type_to_file("describe_tensor"),
@@ -576,8 +608,38 @@ mod tests {
             envelope_type_to_file("missing_fake_kernel"),
             Some(IntermediateFileType::Export)
         );
+
+        // artifact is None (routed by route_artifact based on name)
+        assert_eq!(envelope_type_to_file("artifact"), None);
         assert_eq!(envelope_type_to_file("str"), None);
         assert_eq!(envelope_type_to_file("unknown_type"), None);
+    }
+
+    #[test]
+    fn test_route_artifact() {
+        // Cache artifacts
+        assert_eq!(
+            route_artifact("cache_hit_abc123"),
+            IntermediateFileType::Cache
+        );
+        assert_eq!(
+            route_artifact("cache_miss_def456"),
+            IntermediateFileType::Cache
+        );
+        assert_eq!(
+            route_artifact("cache_bypass_ghi789"),
+            IntermediateFileType::Cache
+        );
+
+        // Regular artifacts
+        assert_eq!(
+            route_artifact("dynamo_output_graph"),
+            IntermediateFileType::CompileArtifacts
+        );
+        assert_eq!(
+            route_artifact("some_other_artifact"),
+            IntermediateFileType::CompileArtifacts
+        );
     }
 
     #[test]
@@ -598,7 +660,7 @@ mod tests {
             payload: Some("class GraphModule...".to_string()),
         };
 
-        writer.write_entry(entry, IntermediateFileType::Graphs)?;
+        writer.write_entry(entry, IntermediateFileType::CompileArtifacts)?;
 
         // Write a chromium event
         writer.write_chromium_event(serde_json::json!({
@@ -620,7 +682,7 @@ mod tests {
 
         // Verify files were created
         assert!(temp_dir.path().join("manifest.json").exists());
-        assert!(temp_dir.path().join("graphs.jsonl").exists());
+        assert!(temp_dir.path().join("compile_artifacts.jsonl").exists());
         assert!(temp_dir.path().join("chromium_events.json").exists());
 
         Ok(())

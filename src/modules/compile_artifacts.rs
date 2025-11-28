@@ -4,6 +4,8 @@
 //! - Graph outputs (dynamo_output_graph, aot graphs, inductor graphs, etc.)
 //! - Code generation (inductor_output_code)
 //! - Generic artifacts (artifact, dump_file, link)
+//!
+//! All inputs come from a single compile_artifacts.jsonl file.
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -40,154 +42,116 @@ impl Module for CompileArtifactsModule {
     }
 
     fn subscriptions(&self) -> &[IntermediateFileType] {
-        &[
-            IntermediateFileType::Graphs,
-            IntermediateFileType::Codegen,
-            IntermediateFileType::Artifacts,
-        ]
+        &[IntermediateFileType::CompileArtifacts]
     }
 
     fn render(&self, ctx: &ModuleContext) -> Result<ModuleOutput> {
         let mut files = Vec::new();
         let mut directory_entries: HashMap<String, Vec<DirectoryEntry>> = HashMap::new();
 
-        // Process graphs
-        self.process_graphs(ctx, &mut files, &mut directory_entries)?;
+        for entry in ctx.read_jsonl(IntermediateFileType::CompileArtifacts)? {
+            let compile_id = entry
+                .compile_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
 
-        // Process codegen (inductor output code)
-        self.process_codegen(ctx, &mut files, &mut directory_entries)?;
+            match entry.entry_type.as_str() {
+                // Graph types
+                "dynamo_output_graph"
+                | "aot_forward_graph"
+                | "aot_backward_graph"
+                | "aot_joint_graph"
+                | "aot_inference_graph"
+                | "inductor_pre_grad_graph"
+                | "inductor_post_grad_graph"
+                | "optimize_ddp_split_graph"
+                | "compiled_autograd_graph" => {
+                    let filename = format!("{}.txt", entry.entry_type);
+                    let path = PathBuf::from(&compile_id).join(&filename);
+                    let content = entry.payload.unwrap_or_default();
+                    files.push((path.clone(), content));
 
-        // Process generic artifacts
-        self.process_artifacts(ctx, &mut files, &mut directory_entries)?;
+                    directory_entries
+                        .entry(compile_id)
+                        .or_default()
+                        .push(DirectoryEntry::new(
+                            filename,
+                            path.to_string_lossy().to_string(),
+                        ));
+                }
 
-        Ok(ModuleOutput {
-            files,
-            directory_entries,
-            index_contribution: None,
-        })
-    }
-}
-
-impl CompileArtifactsModule {
-    fn process_graphs(
-        &self,
-        ctx: &ModuleContext,
-        files: &mut Vec<(PathBuf, String)>,
-        directory_entries: &mut HashMap<String, Vec<DirectoryEntry>>,
-    ) -> Result<()> {
-        for entry in ctx.read_jsonl(IntermediateFileType::Graphs)? {
-            let compile_id = entry.compile_id.clone().unwrap_or_else(|| "unknown".to_string());
-
-            let filename = match entry.entry_type.as_str() {
                 "optimize_ddp_split_child" => {
                     let name = entry
                         .metadata
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
-                    format!("optimize_ddp_split_child_{}.txt", name)
+                    let filename = format!("optimize_ddp_split_child_{}.txt", name);
+                    let path = PathBuf::from(&compile_id).join(&filename);
+                    let content = entry.payload.unwrap_or_default();
+                    files.push((path.clone(), content));
+
+                    directory_entries
+                        .entry(compile_id)
+                        .or_default()
+                        .push(DirectoryEntry::new(
+                            filename,
+                            path.to_string_lossy().to_string(),
+                        ));
                 }
+
                 "graph_dump" => {
                     let name = entry
                         .metadata
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("graph_dump");
-                    format!("{}.txt", name)
+                    let filename = format!("{}.txt", name);
+                    let path = PathBuf::from(&compile_id).join(&filename);
+                    let content = entry.payload.unwrap_or_default();
+                    files.push((path.clone(), content));
+
+                    directory_entries
+                        .entry(compile_id)
+                        .or_default()
+                        .push(DirectoryEntry::new(
+                            filename,
+                            path.to_string_lossy().to_string(),
+                        ));
                 }
-                other => format!("{}.txt", other),
-            };
 
-            let path = PathBuf::from(&compile_id).join(&filename);
-            let content = entry.payload.unwrap_or_default();
-            files.push((path.clone(), content));
+                // Codegen
+                "inductor_output_code" => {
+                    let base_filename = entry
+                        .metadata
+                        .get("filename")
+                        .and_then(|v| v.as_str())
+                        .and_then(|p| std::path::Path::new(p).file_stem())
+                        .and_then(|s| s.to_str())
+                        .map(|s| format!("inductor_output_code_{}", s))
+                        .unwrap_or_else(|| "inductor_output_code".to_string());
 
-            directory_entries
-                .entry(compile_id)
-                .or_default()
-                .push(DirectoryEntry::new(
-                    filename,
-                    path.to_string_lossy().to_string(),
-                ));
-        }
+                    let payload = entry.payload.unwrap_or_default();
+                    let filename = format!("{}.txt", base_filename);
+                    let path = PathBuf::from(&compile_id).join(&filename);
+                    files.push((path.clone(), payload));
 
-        Ok(())
-    }
+                    directory_entries
+                        .entry(compile_id)
+                        .or_default()
+                        .push(DirectoryEntry::new(
+                            filename,
+                            path.to_string_lossy().to_string(),
+                        ));
+                }
 
-    fn process_codegen(
-        &self,
-        ctx: &ModuleContext,
-        files: &mut Vec<(PathBuf, String)>,
-        directory_entries: &mut HashMap<String, Vec<DirectoryEntry>>,
-    ) -> Result<()> {
-        for entry in ctx.read_jsonl(IntermediateFileType::Codegen)? {
-            // Skip dynamo_cpp_guards_str (handled by GuardsModule)
-            if entry.entry_type == "dynamo_cpp_guards_str" {
-                continue;
-            }
-
-            if entry.entry_type != "inductor_output_code" {
-                continue;
-            }
-
-            let compile_id = entry.compile_id.clone().unwrap_or_else(|| "unknown".to_string());
-
-            // Get filename from metadata if available
-            let base_filename = entry
-                .metadata
-                .get("filename")
-                .and_then(|v| v.as_str())
-                .and_then(|p| std::path::Path::new(p).file_stem())
-                .and_then(|s| s.to_str())
-                .map(|s| format!("inductor_output_code_{}", s))
-                .unwrap_or_else(|| "inductor_output_code".to_string());
-
-            let payload = entry.payload.unwrap_or_default();
-
-            let (filename, content) = if self.plain_text {
-                (format!("{}.txt", base_filename), payload)
-            } else {
-                // For now, just output as txt since we don't have highlighting wired up
-                // Full implementation would use syntect or similar
-                (format!("{}.txt", base_filename), payload)
-            };
-
-            let path = PathBuf::from(&compile_id).join(&filename);
-            files.push((path.clone(), content));
-
-            directory_entries
-                .entry(compile_id)
-                .or_default()
-                .push(DirectoryEntry::new(
-                    filename,
-                    path.to_string_lossy().to_string(),
-                ));
-        }
-
-        Ok(())
-    }
-
-    fn process_artifacts(
-        &self,
-        ctx: &ModuleContext,
-        files: &mut Vec<(PathBuf, String)>,
-        directory_entries: &mut HashMap<String, Vec<DirectoryEntry>>,
-    ) -> Result<()> {
-        for entry in ctx.read_jsonl(IntermediateFileType::Artifacts)? {
-            let compile_id = entry.compile_id.clone().unwrap_or_else(|| "unknown".to_string());
-
-            match entry.entry_type.as_str() {
+                // Generic artifact (non-cache)
                 "artifact" => {
                     let name = entry
                         .metadata
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("artifact");
-
-                    // Skip cache artifacts (handled by CacheModule)
-                    if is_cache_artifact(name) {
-                        continue;
-                    }
 
                     let encoding = entry
                         .metadata
@@ -198,7 +162,6 @@ impl CompileArtifactsModule {
                     let payload = entry.payload.unwrap_or_default();
                     let (filename, content) = match encoding {
                         "json" => {
-                            // Pretty-print JSON
                             let formatted = serde_json::from_str::<serde_json::Value>(&payload)
                                 .map(|v| serde_json::to_string_pretty(&v).unwrap_or(payload.clone()))
                                 .unwrap_or(payload);
@@ -218,6 +181,8 @@ impl CompileArtifactsModule {
                             path.to_string_lossy().to_string(),
                         ));
                 }
+
+                // Dump file (global, not per-compile)
                 "dump_file" => {
                     let name = entry
                         .metadata
@@ -231,7 +196,6 @@ impl CompileArtifactsModule {
 
                     files.push((path.clone(), content));
 
-                    // dump_file is global (not tied to compile_id)
                     directory_entries
                         .entry("__global__".to_string())
                         .or_default()
@@ -240,6 +204,8 @@ impl CompileArtifactsModule {
                             path.to_string_lossy().to_string(),
                         ));
                 }
+
+                // External link
                 "link" => {
                     let name = entry
                         .metadata
@@ -257,24 +223,22 @@ impl CompileArtifactsModule {
                         .or_default()
                         .push(DirectoryEntry::new(name, url));
                 }
+
                 _ => {}
             }
         }
 
-        Ok(())
+        Ok(ModuleOutput {
+            files,
+            directory_entries,
+            index_contribution: None,
+        })
     }
-}
-
-/// Check if artifact name indicates a cache artifact
-fn is_cache_artifact(name: &str) -> bool {
-    name.contains("cache_hit") || name.contains("cache_miss") || name.contains("cache_bypass")
 }
 
 /// Sanitize dump filename, handling eval_with_key pattern
 fn sanitize_dump_filename(name: &str) -> String {
-    // Handle eval_with_key_<id> pattern
     if name.starts_with("eval_with_key_") {
-        // Extract just the ID part
         if let Some(id) = name.strip_prefix("eval_with_key_") {
             return format!("eval_with_key_{}", id);
         }
@@ -337,19 +301,19 @@ mod tests {
             string_table_entries: 0,
             parse_mode: "normal".to_string(),
             ranks: vec![0],
-            files: vec!["graphs.jsonl".to_string()],
+            files: vec!["compile_artifacts.jsonl".to_string()],
         }
     }
 
     #[test]
-    fn test_process_graphs() -> Result<()> {
+    fn test_process_compile_artifacts() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let manifest = create_test_manifest();
         let config = ModuleConfig::default();
 
-        // Create graphs.jsonl
-        let graphs_path = temp_dir.path().join("graphs.jsonl");
-        let mut file = File::create(&graphs_path)?;
+        // Create compile_artifacts.jsonl
+        let artifacts_path = temp_dir.path().join("compile_artifacts.jsonl");
+        let mut file = File::create(&artifacts_path)?;
         writeln!(
             file,
             r#"{{"type":"dynamo_output_graph","compile_id":"0_0","rank":0,"timestamp":"2024-01-01T00:00:00Z","thread":1,"pathname":"test.py","lineno":1,"metadata":{{}},"payload":"class GraphModule(nn.Module):..."}}"#
@@ -366,15 +330,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn test_is_cache_artifact() {
-        assert!(is_cache_artifact("cache_hit_abc123"));
-        assert!(is_cache_artifact("cache_miss_def456"));
-        assert!(is_cache_artifact("cache_bypass_ghi789"));
-        assert!(!is_cache_artifact("dynamo_output_graph"));
-        assert!(!is_cache_artifact("some_other_artifact"));
     }
 
     #[test]

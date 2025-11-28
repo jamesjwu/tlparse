@@ -180,7 +180,7 @@ mod tests {
             string_table_entries: 0,
             parse_mode: "normal".to_string(),
             ranks: vec![0],
-            files: vec!["graphs.jsonl".to_string()],
+            files: vec!["compile_artifacts.jsonl".to_string()],
         }
     }
 
@@ -191,8 +191,8 @@ mod tests {
         let config = ModuleConfig::default();
 
         // Create a test JSONL file
-        let graphs_path = temp_dir.path().join("graphs.jsonl");
-        let mut file = File::create(&graphs_path)?;
+        let artifacts_path = temp_dir.path().join("compile_artifacts.jsonl");
+        let mut file = File::create(&artifacts_path)?;
         writeln!(
             file,
             r#"{{"type":"dynamo_output_graph","compile_id":"0_0","rank":0,"timestamp":"2024-01-01T00:00:00Z","thread":1,"pathname":"test.py","lineno":1,"metadata":{{}},"payload":"graph content"}}"#
@@ -204,7 +204,7 @@ mod tests {
 
         let ctx = ModuleContext::new(temp_dir.path(), temp_dir.path(), &manifest, &config);
 
-        let entries = ctx.read_jsonl(IntermediateFileType::Graphs)?;
+        let entries = ctx.read_jsonl(IntermediateFileType::CompileArtifacts)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].compile_id, Some("0_0".to_string()));
         assert_eq!(entries[1].compile_id, Some("0_1".to_string()));
@@ -218,8 +218,8 @@ mod tests {
         let manifest = create_test_manifest();
         let config = ModuleConfig::default();
 
-        let graphs_path = temp_dir.path().join("graphs.jsonl");
-        let mut file = File::create(&graphs_path)?;
+        let artifacts_path = temp_dir.path().join("compile_artifacts.jsonl");
+        let mut file = File::create(&artifacts_path)?;
         writeln!(
             file,
             r#"{{"type":"dynamo_output_graph","compile_id":"0_0","rank":0,"timestamp":"2024-01-01T00:00:00Z","thread":1,"pathname":"test.py","lineno":1,"metadata":{{}},"payload":"graph1"}}"#
@@ -231,7 +231,7 @@ mod tests {
 
         let ctx = ModuleContext::new(temp_dir.path(), temp_dir.path(), &manifest, &config);
 
-        let entries = ctx.get_entries_for_compile(IntermediateFileType::Graphs, "0_0")?;
+        let entries = ctx.get_entries_for_compile(IntermediateFileType::CompileArtifacts, "0_0")?;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].payload, Some("graph1".to_string()));
 

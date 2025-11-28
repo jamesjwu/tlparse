@@ -232,7 +232,7 @@ mod tests {
         }
 
         fn subscriptions(&self) -> &[IntermediateFileType] {
-            &[IntermediateFileType::Graphs]
+            &[IntermediateFileType::CompileArtifacts]
         }
 
         fn render(&self, _ctx: &context::ModuleContext) -> Result<ModuleOutput> {
