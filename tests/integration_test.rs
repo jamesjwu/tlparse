@@ -2937,13 +2937,16 @@ fn test_intermediate_file_generation() {
         .expect("chromium_events.json should be valid JSON array");
     assert!(!chromium_events.is_empty(), "Should have chromium events");
 
-    // Check that graphs.jsonl exists and has valid entries
-    let graphs_path = output_path.join("graphs.jsonl");
-    assert!(graphs_path.exists(), "graphs.jsonl should exist");
-    let graphs_content = fs::read_to_string(&graphs_path).unwrap();
-    for line in graphs_content.lines() {
-        let entry: serde_json::Value =
-            serde_json::from_str(line).expect("Each line in graphs.jsonl should be valid JSON");
+    // Check that compile_artifacts.jsonl exists and has valid entries
+    let artifacts_path = output_path.join("compile_artifacts.jsonl");
+    assert!(
+        artifacts_path.exists(),
+        "compile_artifacts.jsonl should exist"
+    );
+    let artifacts_content = fs::read_to_string(&artifacts_path).unwrap();
+    for line in artifacts_content.lines() {
+        let entry: serde_json::Value = serde_json::from_str(line)
+            .expect("Each line in compile_artifacts.jsonl should be valid JSON");
         assert!(
             entry.get("type").is_some(),
             "Entry should have 'type' field"
@@ -2952,7 +2955,7 @@ fn test_intermediate_file_generation() {
             entry.get("timestamp").is_some(),
             "Entry should have 'timestamp' field"
         );
-        // Verify this is a graph type
+        // Verify this is a compile artifact type
         let entry_type = entry.get("type").unwrap().as_str().unwrap();
         assert!(
             [
@@ -2966,10 +2969,14 @@ fn test_intermediate_file_generation() {
                 "graph_dump",
                 "optimize_ddp_split_graph",
                 "optimize_ddp_split_child",
-                "compiled_autograd_graph"
+                "compiled_autograd_graph",
+                "inductor_output_code",
+                "artifact",
+                "dump_file",
+                "link"
             ]
             .contains(&entry_type),
-            "Entry type {} should be a graph type",
+            "Entry type {} should be a compile artifact type",
             entry_type
         );
     }
@@ -3067,5 +3074,5 @@ fn test_intermediate_cli_integration() {
     // Verify files were created
     assert!(output_path.join("manifest.json").exists());
     assert!(output_path.join("chromium_events.json").exists());
-    assert!(output_path.join("graphs.jsonl").exists());
+    assert!(output_path.join("compile_artifacts.jsonl").exists());
 }
