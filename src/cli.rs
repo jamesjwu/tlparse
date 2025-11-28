@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use tlparse::{
     // New reusable library API for multi-rank landing generation
+    generate_intermediate_files,
     generate_multi_rank_landing,
     parse_path,
     // Context used to pass rank list; other fields are recomputed inside the API
@@ -57,6 +58,9 @@ pub struct Cli {
     /// Parse all ranks and create a unified multi-rank report
     #[arg(long)]
     all_ranks_html: bool,
+    /// Generate intermediate JSON files only (no HTML rendering)
+    #[arg(long)]
+    intermediate_only: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -95,12 +99,23 @@ fn main() -> anyhow::Result<()> {
         strict: cli.strict,
         strict_compile_id: cli.strict_compile_id,
         custom_parsers: Vec::new(),
-        custom_header_html: cli.custom_header_html,
+        custom_header_html: cli.custom_header_html.clone(),
         verbose: cli.verbose,
         plain_text: cli.plain_text,
         export: cli.export,
         inductor_provenance: cli.inductor_provenance,
+        intermediate_output: cli.intermediate_only.clone(),
     };
+
+    // Handle intermediate-only mode
+    if let Some(ref intermediate_dir) = cli.intermediate_only {
+        fs::create_dir_all(intermediate_dir)?;
+        let manifest = generate_intermediate_files(&path, intermediate_dir, &config)?;
+        println!("Generated intermediate files in {}", intermediate_dir.display());
+        println!("  Total envelopes: {}", manifest.total_envelopes);
+        println!("  Files: {:?}", manifest.files);
+        return Ok(());
+    }
 
     if cli.all_ranks_html {
         handle_all_ranks(&config, path, cli.out, cli.overwrite, !cli.no_browser)?;

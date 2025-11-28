@@ -2890,3 +2890,140 @@ fn test_raw_jsonl_structure() {
         }
     }
 }
+
+#[test]
+fn test_intermediate_file_generation() {
+    let temp_dir = tempdir().expect("Failed to create temp directory");
+    let output_path = temp_dir.path();
+
+    let path = Path::new("tests/inputs/simple.log").to_path_buf();
+    let config = tlparse::ParseConfig {
+        strict: true,
+        ..Default::default()
+    };
+
+    let manifest = tlparse::generate_intermediate_files(&path, output_path, &config);
+    assert!(manifest.is_ok(), "generate_intermediate_files should succeed");
+    let manifest = manifest.unwrap();
+
+    // Check manifest fields
+    assert_eq!(manifest.version, "2.0");
+    assert!(manifest.total_envelopes > 0, "Should have parsed some envelopes");
+    assert!(!manifest.files.is_empty(), "Should have generated some files");
+
+    // Check that manifest.json was created
+    let manifest_path = output_path.join("manifest.json");
+    assert!(manifest_path.exists(), "manifest.json should exist");
+
+    // Check that string_table.json was created
+    let string_table_path = output_path.join("string_table.json");
+    assert!(string_table_path.exists(), "string_table.json should exist");
+
+    // Check that chromium_events.json exists and is valid JSON array
+    let chromium_path = output_path.join("chromium_events.json");
+    assert!(chromium_path.exists(), "chromium_events.json should exist");
+    let chromium_content = fs::read_to_string(&chromium_path).unwrap();
+    let chromium_events: Vec<serde_json::Value> = serde_json::from_str(&chromium_content)
+        .expect("chromium_events.json should be valid JSON array");
+    assert!(!chromium_events.is_empty(), "Should have chromium events");
+
+    // Check that graphs.jsonl exists and has valid entries
+    let graphs_path = output_path.join("graphs.jsonl");
+    assert!(graphs_path.exists(), "graphs.jsonl should exist");
+    let graphs_content = fs::read_to_string(&graphs_path).unwrap();
+    for line in graphs_content.lines() {
+        let entry: serde_json::Value = serde_json::from_str(line)
+            .expect("Each line in graphs.jsonl should be valid JSON");
+        assert!(entry.get("type").is_some(), "Entry should have 'type' field");
+        assert!(entry.get("timestamp").is_some(), "Entry should have 'timestamp' field");
+        // Verify this is a graph type
+        let entry_type = entry.get("type").unwrap().as_str().unwrap();
+        assert!(
+            ["dynamo_output_graph", "aot_forward_graph", "aot_backward_graph",
+             "aot_joint_graph", "aot_inference_graph", "inductor_pre_grad_graph",
+             "inductor_post_grad_graph", "graph_dump", "optimize_ddp_split_graph",
+             "optimize_ddp_split_child", "compiled_autograd_graph"].contains(&entry_type),
+            "Entry type {} should be a graph type", entry_type
+        );
+    }
+
+    // Check compilation_metrics.jsonl
+    let metrics_path = output_path.join("compilation_metrics.jsonl");
+    if metrics_path.exists() {
+        let metrics_content = fs::read_to_string(&metrics_path).unwrap();
+        for line in metrics_content.lines() {
+            let entry: serde_json::Value = serde_json::from_str(line)
+                .expect("Each line in compilation_metrics.jsonl should be valid JSON");
+            assert!(entry.get("type").is_some(), "Entry should have 'type' field");
+        }
+    }
+
+    // Verify envelope counts in manifest match actual entries
+    let actual_chromium_count = chromium_events.len() as u64;
+    assert_eq!(
+        manifest.envelope_counts.get("chromium_event").copied().unwrap_or(0),
+        actual_chromium_count,
+        "Manifest chromium_event count should match actual events"
+    );
+}
+
+#[test]
+fn test_intermediate_file_with_compilation_metrics() {
+    let temp_dir = tempdir().expect("Failed to create temp directory");
+    let output_path = temp_dir.path();
+
+    // Use comp_metrics.log which has compilation_metrics entries
+    let path = Path::new("tests/inputs/comp_metrics.log").to_path_buf();
+    let config = tlparse::ParseConfig {
+        strict: false, // comp_metrics.log may have some issues
+        ..Default::default()
+    };
+
+    let manifest = tlparse::generate_intermediate_files(&path, output_path, &config);
+    assert!(manifest.is_ok(), "generate_intermediate_files should succeed");
+    let _manifest = manifest.unwrap();
+
+    // Check that compilation_metrics.jsonl exists
+    let metrics_path = output_path.join("compilation_metrics.jsonl");
+    assert!(metrics_path.exists(), "compilation_metrics.jsonl should exist for comp_metrics.log");
+
+    let metrics_content = fs::read_to_string(&metrics_path).unwrap();
+    let mut found_compilation_metrics = false;
+    let mut found_dynamo_start = false;
+
+    for line in metrics_content.lines() {
+        let entry: serde_json::Value = serde_json::from_str(line)
+            .expect("Each line should be valid JSON");
+        let entry_type = entry.get("type").unwrap().as_str().unwrap();
+        if entry_type == "compilation_metrics" {
+            found_compilation_metrics = true;
+            // Check that metadata has expected fields
+            assert!(entry.get("metadata").is_some(), "Should have metadata");
+        }
+        if entry_type == "dynamo_start" {
+            found_dynamo_start = true;
+        }
+    }
+
+    assert!(found_compilation_metrics || found_dynamo_start,
+        "Should find either compilation_metrics or dynamo_start entries");
+}
+
+#[test]
+fn test_intermediate_cli_integration() {
+    let temp_dir = tempdir().expect("Failed to create temp directory");
+    let output_path = temp_dir.path().join("intermediate_output");
+
+    // Test the CLI with --intermediate-only flag
+    let mut cmd = Command::cargo_bin("tlparse").unwrap();
+    cmd.arg("tests/inputs/simple.log")
+        .arg("--intermediate-only")
+        .arg(&output_path);
+
+    cmd.assert().success();
+
+    // Verify files were created
+    assert!(output_path.join("manifest.json").exists());
+    assert!(output_path.join("chromium_events.json").exists());
+    assert!(output_path.join("graphs.jsonl").exists());
+}

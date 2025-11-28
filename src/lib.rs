@@ -20,6 +20,7 @@ use crate::parsers::ParserOutput;
 use crate::parsers::StructuredLogParser;
 use crate::templates::*;
 use crate::types::*;
+pub mod intermediate;
 pub mod parsers;
 mod templates;
 mod types;
@@ -28,6 +29,10 @@ pub use types::{
     ArtifactFlags, CollectiveSchedule, CollectivesParityReport, Diagnostics, DivergenceFlags,
     DivergenceGroup, ExecOrderSummary, GraphAnalysis, GraphCollectivesParity, GraphRuntime,
     MultiRankContext, RankMetaData, RuntimeAnalysis, RuntimeRankDetail,
+};
+
+pub use intermediate::{
+    IntermediateEntry, IntermediateFileType, IntermediateManifest, IntermediateWriter,
 };
 
 pub use execution_order::{
@@ -50,6 +55,8 @@ pub struct ParseConfig {
     pub plain_text: bool,
     pub export: bool,
     pub inductor_provenance: bool,
+    /// If set, generate intermediate JSON files to this directory
+    pub intermediate_output: Option<PathBuf>,
 }
 
 impl Default for ParseConfig {
@@ -63,6 +70,7 @@ impl Default for ParseConfig {
             plain_text: false,
             export: false,
             inductor_provenance: false,
+            intermediate_output: None,
         }
     }
 }
@@ -1243,6 +1251,198 @@ pub fn parse_path(path: &PathBuf, config: &ParseConfig) -> anyhow::Result<ParseO
     }
 
     Ok(output)
+}
+
+/// Generate intermediate JSON files from a log file.
+///
+/// This creates organized JSON files that can be consumed by downstream modules
+/// for rendering HTML or other outputs.
+pub fn generate_intermediate_files(
+    path: &PathBuf,
+    output_dir: &Path,
+    config: &ParseConfig,
+) -> anyhow::Result<intermediate::IntermediateManifest> {
+    use crate::intermediate::{
+        detect_envelope_type, envelope_type_to_file, extract_metadata, format_compile_id,
+        IntermediateEntry, IntermediateWriter,
+    };
+
+    if !path.is_file() {
+        bail!("{} is not a file", path.display())
+    }
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+    let file_size = metadata.len();
+
+    let multi = MultiProgress::new();
+    let pb = multi.add(ProgressBar::new(file_size));
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} [{bytes_per_sec}] ({eta})")?
+        .progress_chars("#>-"));
+    let spinner = multi.add(ProgressBar::new_spinner());
+    spinner.set_message("Generating intermediate files...");
+
+    let reader = io::BufReader::new(file);
+
+    let re_glog = Regex::new(concat!(
+        r"(?<level>[VIWEC])(?<month>\d{2})(?<day>\d{2}) ",
+        r"(?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2}).(?<millisecond>\d{6}) ",
+        r"(?<thread>\d+)",
+        r"(?<pathname>[^:]+):(?<line>\d+)\] ",
+        r"(?<payload>.)"
+    ))?;
+
+    let format_timestamp = |caps: &regex::Captures| -> String {
+        let month: u32 = caps.name("month").unwrap().as_str().parse().unwrap();
+        let day: u32 = caps.name("day").unwrap().as_str().parse().unwrap();
+        let hour: u32 = caps.name("hour").unwrap().as_str().parse().unwrap();
+        let minute: u32 = caps.name("minute").unwrap().as_str().parse().unwrap();
+        let second: u32 = caps.name("second").unwrap().as_str().parse().unwrap();
+        let microsecond: u32 = caps.name("millisecond").unwrap().as_str().parse().unwrap();
+        let year = chrono::Utc::now().year();
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+            year, month, day, hour, minute, second, microsecond
+        )
+    };
+
+    let mut writer = IntermediateWriter::new(output_dir)?;
+    let mut string_table: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut bytes_read: u64 = 0;
+    let mut expected_rank: Option<Option<u32>> = None;
+    let mut stats = Stats::default();
+
+    let mut iter = reader
+        .lines()
+        .enumerate()
+        .filter_map(|(i, l)| match l {
+            Ok(l) if !l.is_empty() => Some((i + 1, l)),
+            _ => None,
+        })
+        .peekable();
+
+    while let Some((lineno, line)) = iter.next() {
+        bytes_read += line.len() as u64;
+        pb.set_position(bytes_read);
+        spinner.set_message(format!("Line {} - {}", lineno, stats));
+
+        let Some(caps) = re_glog.captures(&line) else {
+            stats.fail_glog += 1;
+            continue;
+        };
+
+        let payload_str = &line[caps.name("payload").unwrap().start()..];
+        let timestamp = format_timestamp(&caps);
+        let thread: u64 = caps.name("thread").unwrap().as_str().parse().unwrap_or(0);
+        let pathname = caps.name("pathname").unwrap().as_str().to_string();
+        let lineno_parsed: u64 = caps.name("line").unwrap().as_str().parse().unwrap_or(0);
+
+        // Try to parse as JSON envelope
+        let e: Envelope = match serde_json::from_str(payload_str) {
+            Ok(e) => e,
+            Err(_) => {
+                stats.fail_json += 1;
+                continue;
+            }
+        };
+
+        // Handle string table entries
+        if let Some((s, id)) = &e.str {
+            string_table.insert(*id, s.clone());
+            continue;
+        }
+
+        // Handle rank filtering
+        match expected_rank {
+            Some(rank) => {
+                if rank != e.rank {
+                    stats.other_rank += 1;
+                    continue;
+                }
+            }
+            None => {
+                if e.rank.is_some() {
+                    expected_rank = Some(e.rank);
+                }
+            }
+        };
+
+        // Collect payload if present
+        let mut payload: Option<String> = None;
+        if e.has_payload.is_some() {
+            let mut payload_lines = Vec::new();
+            while let Some((_, next_line)) = iter.peek() {
+                if next_line.starts_with('\t') {
+                    if let Some((_, pl)) = iter.next() {
+                        payload_lines.push(pl[1..].to_string());
+                        bytes_read += pl.len() as u64 + 1;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if !payload_lines.is_empty() {
+                payload = Some(payload_lines.join("\n"));
+            }
+        }
+
+        stats.ok += 1;
+
+        // Detect the envelope type
+        let Some(envelope_type) = detect_envelope_type(&e) else {
+            continue;
+        };
+
+        // Route to the appropriate file
+        let Some(file_type) = envelope_type_to_file(envelope_type) else {
+            continue;
+        };
+
+        // Special handling for chromium events - they have a different format
+        if envelope_type == "chromium_event" {
+            if let Some(payload_content) = &payload {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(payload_content) {
+                    writer.write_chromium_event(event)?;
+                }
+            }
+            continue;
+        }
+
+        // Extract metadata for this envelope type
+        let metadata = extract_metadata(&e, envelope_type);
+
+        let entry = IntermediateEntry {
+            entry_type: envelope_type.to_string(),
+            compile_id: format_compile_id(&e.compile_id),
+            rank: e.rank,
+            timestamp,
+            thread,
+            pathname,
+            lineno: lineno_parsed,
+            metadata,
+            payload,
+        };
+
+        writer.write_entry(entry, file_type)?;
+    }
+
+    pb.finish_with_message("Done parsing");
+    spinner.finish_with_message(format!("Final stats: {}", stats));
+
+    // Write string table
+    writer.write_string_table(&string_table)?;
+
+    // Determine parse mode
+    let parse_mode = if config.export { "export" } else { "normal" };
+
+    // Finalize and generate manifest
+    let manifest = writer.finalize(
+        &path.to_string_lossy(),
+        parse_mode,
+        string_table.len() as u64,
+    )?;
+
+    Ok(manifest)
 }
 
 pub fn read_chromium_events_with_pid(
