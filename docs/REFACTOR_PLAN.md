@@ -57,22 +57,14 @@ PyTorch Structured Logs (.log)
     Intermediate Directory:
     ├── manifest.json              # Index of all generated files
     ├── string_table.json          # Interned strings
-    ├── raw.jsonl                  # All envelopes (minus chromium)
-    │
-    ├── by_type/                   # Envelopes organized by type
-    │   ├── dynamo_output_graph.jsonl    # Payloads inlined
-    │   ├── compilation_metrics.jsonl
-    │   ├── chromium_events.json
-    │   ├── dynamo_guards.jsonl
-    │   ├── inductor_output_code.jsonl
-    │   └── ... (one file per envelope type)
-    │
-    └── by_compile_id/             # Envelopes organized by compile_id
-        ├── 0_0_0/
-        │   ├── events.jsonl       # All events for this compile_id
-        │   └── summary.json       # Quick metadata
-        └── 0_0_1/
-            └── ...
+    ├── graphs.jsonl               # All graph outputs
+    ├── codegen.jsonl              # Generated code
+    ├── guards.jsonl               # Guards & symbolic shapes
+    ├── compilation_metrics.jsonl  # Metrics & stacks
+    ├── chromium_events.json       # Trace events
+    ├── artifacts.jsonl            # Generic artifacts
+    ├── tensor_metadata.jsonl      # Tensor descriptions
+    └── export.jsonl               # Export mode data
          ↓
     [Stage 2: Module Rendering]
          ↓
@@ -83,13 +75,11 @@ PyTorch Structured Logs (.log)
         └── ... HTML artifacts
 ```
 
-**Key Design Decision: Inlined Payloads**
+**Key Design Decisions:**
 
-Payloads (graph dumps, generated code, etc.) are stored directly in the JSONL entries rather than as separate files. This works well because:
-1. Files are already split by type, so each JSONL file's payloads are naturally bounded
-2. Self-contained files are easier to understand and debug
-3. No need to manage cross-references between files
-4. Simpler for external tools to consume
+1. **Consolidated files (8 instead of 36)**: Related envelope types grouped into single files
+2. **Inlined payloads**: Payloads stored directly in JSONL entries (self-contained files)
+3. **Type field**: Each entry has a `type` field to identify the original envelope type
 
 ---
 
@@ -101,73 +91,29 @@ Payloads (graph dumps, generated code, etc.) are stored directly in the JSONL en
 intermediate/
 ├── manifest.json                    # Master index
 ├── string_table.json                # Filename interning
-├── raw.jsonl                        # Complete log (minus chromium, str)
 │
-├── by_type/
-│   │
-│   │ # Graph Outputs (payloads inlined)
-│   ├── dynamo_output_graph.jsonl
-│   ├── optimize_ddp_split_graph.jsonl
-│   ├── optimize_ddp_split_child.jsonl
-│   ├── compiled_autograd_graph.jsonl
-│   ├── aot_forward_graph.jsonl
-│   ├── aot_backward_graph.jsonl
-│   ├── aot_inference_graph.jsonl
-│   ├── aot_joint_graph.jsonl
-│   ├── inductor_pre_grad_graph.jsonl
-│   ├── inductor_post_grad_graph.jsonl
-│   ├── graph_dump.jsonl
-│   │
-│   │ # Code Generation
-│   ├── inductor_output_code.jsonl
-│   ├── dynamo_cpp_guards_str.jsonl
-│   │
-│   │ # Guards & Verification
-│   ├── dynamo_guards.jsonl
-│   ├── symbolic_shape_specialization.jsonl
-│   ├── guard_added_fast.jsonl
-│   │
-│   │ # Compilation Metrics
-│   ├── compilation_metrics.jsonl
-│   ├── bwd_compilation_metrics.jsonl
-│   ├── aot_autograd_backward_compilation_metrics.jsonl
-│   │
-│   │ # Stack Traces
-│   ├── dynamo_start.jsonl
-│   │
-│   │ # Symbolic Shapes (for torch.export)
-│   ├── propagate_real_tensors_provenance.jsonl
-│   ├── guard_added.jsonl
-│   ├── create_unbacked_symbol.jsonl
-│   ├── expression_created.jsonl
-│   │
-│   │ # Events & Tracing
-│   ├── chromium_events.json         # Array format for Perfetto
-│   │
-│   │ # Generic Artifacts
-│   ├── artifact.jsonl
-│   ├── dump_file.jsonl
-│   ├── link.jsonl
-│   │
-│   │ # Tensor Metadata
-│   ├── describe_tensor.jsonl
-│   ├── describe_storage.jsonl
-│   ├── describe_source.jsonl
-│   │
-│   │ # Export Mode
-│   ├── missing_fake_kernel.jsonl
-│   ├── mismatched_fake_kernel.jsonl
-│   └── exported_program.jsonl
-│
-└── by_compile_id/
-    ├── _none/                       # Events without compile_id
-    │   ├── events.jsonl
-    │   └── summary.json
-    ├── 0_0_0/
-    │   ├── events.jsonl             # All events for [0/0] attempt 0
-    │   └── summary.json             # Quick access metadata
-    └── ...
+├── graphs.jsonl                     # All graph outputs (dynamo, aot, inductor, etc.)
+├── codegen.jsonl                    # Generated code (inductor output, cpp guards)
+├── guards.jsonl                     # Guards & symbolic shapes
+├── compilation_metrics.jsonl        # Compilation metrics & stacks
+├── chromium_events.json             # Trace events (array format for Perfetto)
+├── artifacts.jsonl                  # Generic artifacts, dump files, links
+├── tensor_metadata.jsonl            # Tensor/storage/source descriptions
+└── export.jsonl                     # Export mode failures & output
 ```
+
+**Consolidated Categories (8 files instead of 36):**
+
+| File | Envelope Types Included |
+|------|------------------------|
+| `graphs.jsonl` | dynamo_output_graph, optimize_ddp_split_graph, optimize_ddp_split_child, compiled_autograd_graph, aot_forward_graph, aot_backward_graph, aot_inference_graph, aot_joint_graph, inductor_pre_grad_graph, inductor_post_grad_graph, graph_dump |
+| `codegen.jsonl` | inductor_output_code, dynamo_cpp_guards_str |
+| `guards.jsonl` | dynamo_guards, symbolic_shape_specialization, guard_added_fast, propagate_real_tensors_provenance, guard_added, create_unbacked_symbol, expression_created |
+| `compilation_metrics.jsonl` | compilation_metrics, bwd_compilation_metrics, aot_autograd_backward_compilation_metrics, dynamo_start, stack (toplevel) |
+| `chromium_events.json` | chromium_event |
+| `artifacts.jsonl` | artifact, dump_file, link |
+| `tensor_metadata.jsonl` | describe_tensor, describe_storage, describe_source |
+| `export.jsonl` | missing_fake_kernel, mismatched_fake_kernel, exported_program |
 
 ### 1.2 File Format Specifications
 
@@ -182,77 +128,43 @@ intermediate/
   "envelope_counts": {
     "dynamo_output_graph": 42,
     "compilation_metrics": 42,
-    "chromium_event": 5000,
-    ...
+    "chromium_event": 5000
   },
-  "compile_ids": ["0_0_0", "0_0_1", "0_1_0", ...],
+  "compile_ids": ["0_0_0", "0_0_1", "0_1_0"],
   "string_table_entries": 150,
-  "parse_mode": "normal",  // or "export", "multi_rank"
-  "ranks": [0],            // list of ranks if multi_rank
-  "files": {
-    "by_type": ["dynamo_output_graph.jsonl", ...],
-    "by_compile_id": ["0_0_0/events.jsonl", ...]
-  }
+  "parse_mode": "normal",
+  "ranks": [0],
+  "files": [
+    "graphs.jsonl",
+    "codegen.jsonl",
+    "guards.jsonl",
+    "compilation_metrics.jsonl",
+    "chromium_events.json",
+    "artifacts.jsonl",
+    "tensor_metadata.jsonl",
+    "export.jsonl"
+  ]
 }
 ```
 
-#### Individual JSONL Entry Format (by_type/*.jsonl)
+#### JSONL Entry Format
+Each entry includes a `type` field to identify the envelope type within the consolidated file:
+
 ```jsonl
-{"compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":42,"metadata":{"sizes":{"L['x']":[[2,3],[3,4]]}},"payload":"def forward(self, x):\n    return x + 1"}
-{"compile_id":"0_0_1",...}
+{"type":"dynamo_output_graph","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":42,"metadata":{"sizes":{"L['x']":[[2,3],[3,4]]}},"payload":"class GraphModule..."}
+{"type":"aot_forward_graph","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:01Z",...,"payload":"def forward..."}
 ```
 
-Each entry includes:
+Fields:
+- `type`: The original envelope type name (e.g., "dynamo_output_graph", "aot_forward_graph")
 - `compile_id`: String form of CompileId (e.g., "0_0_0" or "!0_0_0" for compiled autograd)
 - `rank`: Rank number (for distributed)
 - `timestamp`: ISO-8601 timestamp
 - `thread`: Thread ID
-- `pathname`: Source file (interned ID or full path)
+- `pathname`: Source file
 - `lineno`: Line number
 - `metadata`: Type-specific metadata object
-- `payload`: Inlined payload content (if applicable, as string)
-
-#### `by_compile_id/{id}/summary.json`
-```json
-{
-  "compile_id": "0_0_0",
-  "event_count": 15,
-  "event_types": ["dynamo_start", "dynamo_output_graph", "compilation_metrics"],
-  "has_failure": false,
-  "failure_reason": null,
-  "stack_summary": {
-    "co_name": "forward",
-    "co_filename": "model.py",
-    "co_firstlineno": 42
-  },
-  "metrics": {
-    "entire_frame_compile_time_s": 1.234,
-    "backend_compile_time_s": 0.567
-  }
-}
-```
-
-#### `by_compile_id/{id}/events.jsonl`
-```jsonl
-{"type":"dynamo_start","timestamp":"...","metadata":{...}}
-{"type":"dynamo_output_graph","timestamp":"...","metadata":{...},"payload":"def forward(...):\n    ..."}
-{"type":"compilation_metrics","timestamp":"...","metadata":{...}}
-```
-
-### 1.3 Envelope Type Categorization
-
-| Category | Types | Output Behavior |
-|----------|-------|-----------------|
-| **Graph Outputs** | dynamo_output_graph, optimize_ddp_*, compiled_autograd_graph, aot_*, inductor_*_grad_graph, graph_dump | Payload inlined |
-| **Code Generation** | inductor_output_code, dynamo_cpp_guards_str | Payload inlined |
-| **Guards** | dynamo_guards, symbolic_shape_specialization, guard_added_fast | Metadata only |
-| **Metrics** | compilation_metrics, bwd_compilation_metrics, aot_autograd_backward_compilation_metrics | Metadata only (rich) |
-| **Stack Traces** | dynamo_start | Stack in metadata |
-| **Symbolic Shapes** | propagate_real_tensors_provenance, guard_added, create_unbacked_symbol, expression_created | Metadata with trees |
-| **Events** | chromium_event | Special: array format JSON |
-| **Artifacts** | artifact, dump_file, link | Payload inlined or URL |
-| **Tensor Metadata** | describe_tensor, describe_storage, describe_source | Metadata only |
-| **Export** | missing_fake_kernel, mismatched_fake_kernel, exported_program | Metadata or payload inlined |
+- `payload`: Inlined payload content (if applicable)
 
 ---
 
@@ -280,11 +192,16 @@ pub trait OutputModule {
 
 /// Specifies an intermediate file dependency
 pub enum IntermediateFile {
-    ByType(&'static str),           // e.g., "compilation_metrics"
-    ByCompileId,                    // Access to by_compile_id/
-    Manifest,                       // manifest.json
-    StringTable,                    // string_table.json
-    Raw,                            // raw.jsonl
+    Graphs,              // graphs.jsonl
+    Codegen,             // codegen.jsonl
+    Guards,              // guards.jsonl
+    CompilationMetrics,  // compilation_metrics.jsonl
+    ChromiumEvents,      // chromium_events.json
+    Artifacts,           // artifacts.jsonl
+    TensorMetadata,      // tensor_metadata.jsonl
+    Export,              // export.jsonl
+    Manifest,            // manifest.json
+    StringTable,         // string_table.json
 }
 
 /// Output from a module
@@ -302,17 +219,16 @@ pub struct ModuleOutput {
 
 | Module | Required Inputs | Outputs |
 |--------|-----------------|---------|
-| `IndexModule` | manifest, by_compile_id, compilation_metrics, dynamo_start | index.html |
-| `CompileDirectoryModule` | manifest, by_compile_id | compile_directory.json |
-| `GraphViewerModule` | dynamo_output_graph, aot_*, inductor_*_graph, graph_dump | {id}/*.txt files |
-| `InductorCodeModule` | inductor_output_code | {id}/inductor_output_code.html |
-| `CompilationMetricsModule` | compilation_metrics, symbolic_shape_specialization, guard_added_fast, dynamo_start | {id}/compilation_metrics.html |
+| `IndexModule` | manifest, compilation_metrics | index.html |
+| `CompileDirectoryModule` | manifest, compilation_metrics | compile_directory.json |
+| `GraphViewerModule` | graphs | {id}/*.txt files |
+| `CodegenModule` | codegen | {id}/inductor_output_code.html |
+| `CompilationMetricsModule` | compilation_metrics, guards | {id}/compilation_metrics.html |
 | `FailuresModule` | compilation_metrics | failures_and_restarts.html |
-| `GuardsModule` | dynamo_guards | {id}/dynamo_guards.html |
+| `GuardsModule` | guards | {id}/dynamo_guards.html, {id}/symbolic_guard_information.html |
 | `ChromiumModule` | chromium_events | chromium_events.json (passthrough) |
-| `SymbolicShapeModule` | propagate_real_tensors_provenance, guard_added, expression_created, create_unbacked_symbol | {id}/symbolic_guard_information.html |
-| `ExportModule` | missing_fake_kernel, mismatched_fake_kernel, exported_program, guard_added, propagate_real_tensors_provenance | index.html (export mode) |
-| `MultiRankModule` | (multiple rank intermediate dirs) | index.html (multi-rank), diagnostics |
+| `ExportModule` | export, guards | index.html (export mode) |
+| `MultiRankModule` | tensor_metadata, (multiple dirs) | index.html (multi-rank), diagnostics |
 
 ### 2.3 Module Registration
 
@@ -323,12 +239,11 @@ pub fn default_modules() -> Vec<Box<dyn OutputModule>> {
         Box::new(IndexModule::new()),
         Box::new(CompileDirectoryModule::new()),
         Box::new(GraphViewerModule::new()),
-        Box::new(InductorCodeModule::new()),
+        Box::new(CodegenModule::new()),
         Box::new(CompilationMetricsModule::new()),
         Box::new(FailuresModule::new()),
         Box::new(GuardsModule::new()),
         Box::new(ChromiumModule::new()),
-        Box::new(SymbolicShapeModule::new()),
     ]
 }
 
@@ -336,7 +251,7 @@ pub fn default_modules() -> Vec<Box<dyn OutputModule>> {
 pub fn export_modules() -> Vec<Box<dyn OutputModule>> {
     vec![
         Box::new(ExportModule::new()),
-        Box::new(SymbolicShapeModule::new()),
+        Box::new(GuardsModule::new()),  // For symbolic shape info
     ]
 }
 ```
@@ -422,133 +337,65 @@ tlparse <input.log> -o <output_dir>
 
 ## Detailed Intermediate File Schemas
 
-### `by_type/dynamo_output_graph.jsonl`
+### `graphs.jsonl`
+Contains all graph outputs (dynamo, aot, inductor graphs):
 ```jsonl
-{
-  "compile_id": "0_0_0",
-  "rank": 0,
-  "timestamp": "2024-11-28T12:00:00.000Z",
-  "thread": 12345,
-  "pathname": "torch/_dynamo/convert_frame.py",
-  "lineno": 456,
-  "metadata": {
-    "sizes": {
-      "L['x']": [[2, 3], [3, 4]],
-      "L['y']": [[4, 5]]
-    }
-  },
-  "payload": "class GraphModule(torch.nn.Module):\n    def forward(self, L_x_ : torch.Tensor):\n        l_x_ = L_x_\n        add = l_x_ + 1\n        return (add,)"
-}
+{"type":"dynamo_output_graph","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00.000Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":456,"metadata":{"sizes":{"L['x']":[[2,3],[3,4]]}},"payload":"class GraphModule(torch.nn.Module):\n    def forward(self, L_x_):\n        return L_x_ + 1"}
+{"type":"aot_forward_graph","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:01.000Z","thread":12345,"pathname":"torch/_functorch/aot_autograd.py","lineno":123,"metadata":{},"payload":"def forward(self, primals_1):\n    add = primals_1 + 1\n    return [add]"}
+{"type":"inductor_post_grad_graph","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:02.000Z","thread":12345,"pathname":"torch/_inductor/compile_fx.py","lineno":789,"metadata":{},"payload":"def forward(self, arg0_1):\n    return arg0_1 + 1"}
 ```
 
-### `by_type/compilation_metrics.jsonl`
+### `compilation_metrics.jsonl`
+Contains metrics, stacks, and compilation status:
 ```jsonl
-{
-  "compile_id": "0_0_0",
-  "rank": 0,
-  "timestamp": "2024-11-28T12:00:05.000Z",
-  "thread": 12345,
-  "pathname": "torch/_dynamo/convert_frame.py",
-  "lineno": 789,
-  "metadata": {
-    "co_name": "forward",
-    "co_filename": "model.py",
-    "co_firstlineno": 42,
-    "cache_size": 1,
-    "accumulated_cache_size": 1,
-    "guard_count": 15,
-    "shape_env_guard_count": 5,
-    "graph_op_count": 100,
-    "graph_node_count": 50,
-    "graph_input_count": 3,
-    "start_time": 1732795200.0,
-    "entire_frame_compile_time_s": 1.234,
-    "backend_compile_time_s": 0.567,
-    "inductor_compile_time_s": 0.456,
-    "code_gen_time_s": 0.123,
-    "fail_type": null,
-    "fail_reason": null,
-    "fail_user_frame_filename": null,
-    "fail_user_frame_lineno": null,
-    "non_compliant_ops": [],
-    "compliant_custom_ops": [],
-    "restart_reasons": [],
-    "dynamo_time_before_restart_s": null
-  }
-}
+{"type":"dynamo_start","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00.000Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":123,"metadata":{"stack":{"frames":[{"filename":"model.py","line":42,"name":"forward"}]}}}
+{"type":"compilation_metrics","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:05.000Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":789,"metadata":{"co_name":"forward","co_filename":"model.py","co_firstlineno":42,"entire_frame_compile_time_s":1.234,"backend_compile_time_s":0.567,"fail_type":null,"fail_reason":null}}
+{"type":"bwd_compilation_metrics","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:06.000Z","thread":12345,"pathname":"torch/_inductor/compile_fx.py","lineno":456,"metadata":{"inductor_compile_time_s":0.234,"code_gen_time_s":0.1}}
 ```
 
-### `by_type/chromium_events.json`
+### `guards.jsonl`
+Contains all guard-related entries (dynamo guards, symbolic shapes, etc.):
+```jsonl
+{"type":"dynamo_guards","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:03.000Z","thread":12345,"pathname":"torch/_dynamo/guards.py","lineno":100,"metadata":{},"payload":"TENSOR_MATCH(L['x'], ...)\nSHAPE_MATCH(...)"}
+{"type":"symbolic_shape_specialization","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:02.000Z","thread":12345,"pathname":"torch/fx/experimental/symbolic_shapes.py","lineno":234,"metadata":{"symbol":"s0","sources":["L['x'].size()[0]"],"value":"4","reason":"size is statically known"}}
+{"type":"guard_added","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:02.500Z","thread":12345,"pathname":"torch/fx/experimental/symbolic_shapes.py","lineno":300,"metadata":{"expr":"s0 == 4","user_stack":[...]}}
+```
+
+### `chromium_events.json`
+Array format for Perfetto compatibility:
 ```json
 [
-  {
-    "name": "compile",
-    "cat": "dynamo",
-    "ph": "B",
-    "ts": 1732795200000000,
-    "pid": 1234,
-    "tid": 5678
-  },
-  {
-    "name": "compile",
-    "cat": "dynamo",
-    "ph": "E",
-    "ts": 1732795201000000,
-    "pid": 1234,
-    "tid": 5678
-  }
+  {"name":"compile","cat":"dynamo","ph":"B","ts":1732795200000000,"pid":1234,"tid":5678},
+  {"name":"compile","cat":"dynamo","ph":"E","ts":1732795201000000,"pid":1234,"tid":5678}
 ]
 ```
 
-### `by_type/dynamo_start.jsonl`
+### `codegen.jsonl`
+Contains generated code:
 ```jsonl
-{
-  "compile_id": "0_0_0",
-  "rank": 0,
-  "timestamp": "2024-11-28T12:00:00.000Z",
-  "thread": 12345,
-  "pathname": "torch/_dynamo/convert_frame.py",
-  "lineno": 123,
-  "metadata": {
-    "stack": {
-      "frames": [
-        {
-          "filename": "model.py",
-          "line": 42,
-          "name": "forward"
-        },
-        {
-          "filename": "trainer.py",
-          "line": 100,
-          "name": "train_step"
-        }
-      ]
-    }
-  }
-}
+{"type":"inductor_output_code","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:04.000Z","thread":12345,"pathname":"torch/_inductor/graph.py","lineno":500,"metadata":{"filename":"output_code.py"},"payload":"# Generated inductor code\nasync_compile = ..."}
+{"type":"dynamo_cpp_guards_str","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:03.500Z","thread":12345,"pathname":"torch/_dynamo/guards.py","lineno":200,"metadata":{},"payload":"check_tensor(...)"}
 ```
 
-### `by_type/symbolic_shape_specialization.jsonl`
+### `artifacts.jsonl`
+Contains generic artifacts, dump files, and links:
 ```jsonl
-{
-  "compile_id": "0_0_0",
-  "rank": 0,
-  "timestamp": "2024-11-28T12:00:02.000Z",
-  "thread": 12345,
-  "pathname": "torch/fx/experimental/symbolic_shapes.py",
-  "lineno": 234,
-  "metadata": {
-    "symbol": "s0",
-    "sources": ["L['x'].size()[0]"],
-    "value": "4",
-    "reason": "size is statically known",
-    "stacks": [
-      {
-        "frames": [...]
-      }
-    ]
-  }
-}
+{"type":"artifact","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:07.000Z","thread":12345,"pathname":"torch/_dynamo/output.py","lineno":100,"metadata":{"name":"graph_sizes","encoding":"json"},"payload":"{\"nodes\": 50, \"edges\": 75}"}
+{"type":"link","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:08.000Z","thread":12345,"pathname":"torch/_dynamo/output.py","lineno":150,"metadata":{"name":"Detailed Report","url":"https://example.com/report/123"}}
+```
+
+### `tensor_metadata.jsonl`
+Contains tensor descriptions (used for multi-rank analysis):
+```jsonl
+{"type":"describe_tensor","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00.000Z","thread":12345,"pathname":"torch/_dynamo/symbolic.py","lineno":50,"metadata":{"id":1,"ndim":2,"dtype":"float32","device":"cuda:0","size":[32,64],"requires_grad":true}}
+{"type":"describe_storage","compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00.000Z","thread":12345,"pathname":"torch/_dynamo/symbolic.py","lineno":55,"metadata":{"id":1,"size":8192}}
+```
+
+### `export.jsonl`
+Contains export mode data:
+```jsonl
+{"type":"missing_fake_kernel","compile_id":null,"rank":0,"timestamp":"2024-11-28T12:00:00.000Z","thread":12345,"pathname":"torch/export.py","lineno":100,"metadata":{"op":"custom::my_op","reason":"No fake kernel registered"}}
+{"type":"exported_program","compile_id":null,"rank":0,"timestamp":"2024-11-28T12:00:10.000Z","thread":12345,"pathname":"torch/export.py","lineno":500,"metadata":{},"payload":"ExportedProgram:\n    ..."}
 ```
 
 ---
@@ -580,14 +427,8 @@ tlparse <input.log> -o <output_dir>
 2. **Incremental Updates**: Should we support appending to intermediate files?
    - **Recommendation**: Not in v1, but design schema to allow it later
 
-3. **External Schema Publishing**: Should we publish JSON schemas to a separate repo?
-   - **Recommendation**: Start with in-repo docs, consider later
-
-4. **Python Bindings**: How do Python bindings interact with new architecture?
+3. **Python Bindings**: How do Python bindings interact with new architecture?
    - **Recommendation**: Python API exposes both `parse()` and `render()` functions
-
-5. **Backward Compatibility for raw.jsonl**: Should we keep generating `payloads/` directory for raw.jsonl compatibility?
-   - **Recommendation**: Yes, raw.jsonl continues to use payload_file references for backward compat, but by_type files use inlined payloads
 
 ---
 
@@ -602,46 +443,19 @@ tlparse <input.log> -o <output_dir>
 
 ---
 
-## Appendix: Complete Envelope Type Inventory
+## Appendix: Envelope Type → File Mapping
 
-| # | Envelope Type | Category | Payload | Metadata | Current Parser |
-|---|---------------|----------|---------|----------|----------------|
-| 1 | dynamo_output_graph | Graph | inlined | ✓ (sizes) | DynamoOutputGraphParser |
-| 2 | optimize_ddp_split_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 3 | optimize_ddp_split_child | Graph | inlined | ✓ (name) | OptimizeDdpSplitChildParser |
-| 4 | compiled_autograd_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 5 | aot_forward_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 6 | aot_backward_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 7 | aot_inference_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 8 | aot_joint_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 9 | inductor_pre_grad_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 10 | inductor_post_grad_graph | Graph | inlined | ✗ | SentinelFileParser |
-| 11 | graph_dump | Graph | inlined | ✓ (name) | GraphDumpParser |
-| 12 | inductor_output_code | Code | inlined | ✓ (filename) | InductorOutputCodeParser |
-| 13 | dynamo_cpp_guards_str | Code | inlined | ✗ | SentinelFileParser |
-| 14 | dynamo_guards | Guards | inlined | ✗ | DynamoGuardParser |
-| 15 | symbolic_shape_specialization | Guards | ✗ | ✓ | Index collector |
-| 16 | guard_added_fast | Guards | ✗ | ✓ | Index collector |
-| 17 | compilation_metrics | Metrics | ✗ | ✓ (rich) | CompilationMetricsParser |
-| 18 | bwd_compilation_metrics | Metrics | ✗ | ✓ | BwdCompilationMetricsParser |
-| 19 | aot_autograd_backward_compilation_metrics | Metrics | ✗ | ✓ | AOTAutogradBackwardCompilationMetricsParser |
-| 20 | dynamo_start | Stack | ✗ | ✓ (stack) | Index collector |
-| 21 | propagate_real_tensors_provenance | Symbolic | ✗ | ✓ | PropagateRealTensorsParser |
-| 22 | guard_added | Symbolic | ✗ | ✓ | PropagateRealTensorsParser |
-| 23 | create_unbacked_symbol | Symbolic | ✗ | ✓ | Index collector |
-| 24 | expression_created | Symbolic | ✗ | ✓ | Index collector |
-| 25 | chromium_event | Events | special | ✗ | Special collector |
-| 26 | artifact | Artifact | inlined | ✓ (name, encoding) | ArtifactParser |
-| 27 | dump_file | Artifact | inlined | ✓ (name) | DumpFileParser |
-| 28 | link | Artifact | ✗ | ✓ (name, url) | LinkParser |
-| 29 | describe_tensor | Metadata | ✗ | ✓ | Collector (multi-rank) |
-| 30 | describe_storage | Metadata | ✗ | ✓ | Collector (multi-rank) |
-| 31 | describe_source | Metadata | ✗ | ✓ | Collector (multi-rank) |
-| 32 | missing_fake_kernel | Export | ✗ | ✓ | Export mode collector |
-| 33 | mismatched_fake_kernel | Export | ✗ | ✓ | Export mode collector |
-| 34 | exported_program | Export | inlined | ✗ | SentinelFileParser |
-| 35 | str | Internal | ✗ | ✓ | String table builder |
-| 36 | stack (toplevel) | Stack | ✗ | ✓ | Unknown stack trie |
+| Intermediate File | Envelope Types |
+|-------------------|----------------|
+| `graphs.jsonl` | dynamo_output_graph, optimize_ddp_split_graph, optimize_ddp_split_child, compiled_autograd_graph, aot_forward_graph, aot_backward_graph, aot_inference_graph, aot_joint_graph, inductor_pre_grad_graph, inductor_post_grad_graph, graph_dump |
+| `codegen.jsonl` | inductor_output_code, dynamo_cpp_guards_str |
+| `guards.jsonl` | dynamo_guards, symbolic_shape_specialization, guard_added_fast, propagate_real_tensors_provenance, guard_added, create_unbacked_symbol, expression_created |
+| `compilation_metrics.jsonl` | compilation_metrics, bwd_compilation_metrics, aot_autograd_backward_compilation_metrics, dynamo_start, stack |
+| `chromium_events.json` | chromium_event |
+| `artifacts.jsonl` | artifact, dump_file, link |
+| `tensor_metadata.jsonl` | describe_tensor, describe_storage, describe_source |
+| `export.jsonl` | missing_fake_kernel, mismatched_fake_kernel, exported_program |
+| *(not written)* | str (populates string_table.json instead) |
 
 ---
 
