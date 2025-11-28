@@ -111,7 +111,10 @@ fn main() -> anyhow::Result<()> {
     if let Some(ref intermediate_dir) = cli.intermediate_only {
         fs::create_dir_all(intermediate_dir)?;
         let manifest = generate_intermediate_files(&path, intermediate_dir, &config)?;
-        println!("Generated intermediate files in {}", intermediate_dir.display());
+        println!(
+            "Generated intermediate files in {}",
+            intermediate_dir.display()
+        );
         println!("  Total envelopes: {}", manifest.total_envelopes);
         println!("  Files: {:?}", manifest.files);
         return Ok(());

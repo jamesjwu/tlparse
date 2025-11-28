@@ -2679,7 +2679,8 @@ fn test_parse_log_with_invalid_json_lines() {
     let log_path = temp_dir.path().join("mixed.log");
 
     // Mix of valid and invalid JSON lines
-    let content = "not json at all\n{\"str\": {\"id\": 1, \"value\": \"test\"}}\nanother invalid line";
+    let content =
+        "not json at all\n{\"str\": {\"id\": 1, \"value\": \"test\"}}\nanother invalid line";
     fs::write(&log_path, content).unwrap();
 
     let config = tlparse::ParseConfig {
@@ -2903,13 +2904,22 @@ fn test_intermediate_file_generation() {
     };
 
     let manifest = tlparse::generate_intermediate_files(&path, output_path, &config);
-    assert!(manifest.is_ok(), "generate_intermediate_files should succeed");
+    assert!(
+        manifest.is_ok(),
+        "generate_intermediate_files should succeed"
+    );
     let manifest = manifest.unwrap();
 
     // Check manifest fields
     assert_eq!(manifest.version, "2.0");
-    assert!(manifest.total_envelopes > 0, "Should have parsed some envelopes");
-    assert!(!manifest.files.is_empty(), "Should have generated some files");
+    assert!(
+        manifest.total_envelopes > 0,
+        "Should have parsed some envelopes"
+    );
+    assert!(
+        !manifest.files.is_empty(),
+        "Should have generated some files"
+    );
 
     // Check that manifest.json was created
     let manifest_path = output_path.join("manifest.json");
@@ -2932,18 +2942,35 @@ fn test_intermediate_file_generation() {
     assert!(graphs_path.exists(), "graphs.jsonl should exist");
     let graphs_content = fs::read_to_string(&graphs_path).unwrap();
     for line in graphs_content.lines() {
-        let entry: serde_json::Value = serde_json::from_str(line)
-            .expect("Each line in graphs.jsonl should be valid JSON");
-        assert!(entry.get("type").is_some(), "Entry should have 'type' field");
-        assert!(entry.get("timestamp").is_some(), "Entry should have 'timestamp' field");
+        let entry: serde_json::Value =
+            serde_json::from_str(line).expect("Each line in graphs.jsonl should be valid JSON");
+        assert!(
+            entry.get("type").is_some(),
+            "Entry should have 'type' field"
+        );
+        assert!(
+            entry.get("timestamp").is_some(),
+            "Entry should have 'timestamp' field"
+        );
         // Verify this is a graph type
         let entry_type = entry.get("type").unwrap().as_str().unwrap();
         assert!(
-            ["dynamo_output_graph", "aot_forward_graph", "aot_backward_graph",
-             "aot_joint_graph", "aot_inference_graph", "inductor_pre_grad_graph",
-             "inductor_post_grad_graph", "graph_dump", "optimize_ddp_split_graph",
-             "optimize_ddp_split_child", "compiled_autograd_graph"].contains(&entry_type),
-            "Entry type {} should be a graph type", entry_type
+            [
+                "dynamo_output_graph",
+                "aot_forward_graph",
+                "aot_backward_graph",
+                "aot_joint_graph",
+                "aot_inference_graph",
+                "inductor_pre_grad_graph",
+                "inductor_post_grad_graph",
+                "graph_dump",
+                "optimize_ddp_split_graph",
+                "optimize_ddp_split_child",
+                "compiled_autograd_graph"
+            ]
+            .contains(&entry_type),
+            "Entry type {} should be a graph type",
+            entry_type
         );
     }
 
@@ -2954,14 +2981,21 @@ fn test_intermediate_file_generation() {
         for line in metrics_content.lines() {
             let entry: serde_json::Value = serde_json::from_str(line)
                 .expect("Each line in compilation_metrics.jsonl should be valid JSON");
-            assert!(entry.get("type").is_some(), "Entry should have 'type' field");
+            assert!(
+                entry.get("type").is_some(),
+                "Entry should have 'type' field"
+            );
         }
     }
 
     // Verify envelope counts in manifest match actual entries
     let actual_chromium_count = chromium_events.len() as u64;
     assert_eq!(
-        manifest.envelope_counts.get("chromium_event").copied().unwrap_or(0),
+        manifest
+            .envelope_counts
+            .get("chromium_event")
+            .copied()
+            .unwrap_or(0),
         actual_chromium_count,
         "Manifest chromium_event count should match actual events"
     );
@@ -2980,20 +3014,26 @@ fn test_intermediate_file_with_compilation_metrics() {
     };
 
     let manifest = tlparse::generate_intermediate_files(&path, output_path, &config);
-    assert!(manifest.is_ok(), "generate_intermediate_files should succeed");
+    assert!(
+        manifest.is_ok(),
+        "generate_intermediate_files should succeed"
+    );
     let _manifest = manifest.unwrap();
 
     // Check that compilation_metrics.jsonl exists
     let metrics_path = output_path.join("compilation_metrics.jsonl");
-    assert!(metrics_path.exists(), "compilation_metrics.jsonl should exist for comp_metrics.log");
+    assert!(
+        metrics_path.exists(),
+        "compilation_metrics.jsonl should exist for comp_metrics.log"
+    );
 
     let metrics_content = fs::read_to_string(&metrics_path).unwrap();
     let mut found_compilation_metrics = false;
     let mut found_dynamo_start = false;
 
     for line in metrics_content.lines() {
-        let entry: serde_json::Value = serde_json::from_str(line)
-            .expect("Each line should be valid JSON");
+        let entry: serde_json::Value =
+            serde_json::from_str(line).expect("Each line should be valid JSON");
         let entry_type = entry.get("type").unwrap().as_str().unwrap();
         if entry_type == "compilation_metrics" {
             found_compilation_metrics = true;
@@ -3005,8 +3045,10 @@ fn test_intermediate_file_with_compilation_metrics() {
         }
     }
 
-    assert!(found_compilation_metrics || found_dynamo_start,
-        "Should find either compilation_metrics or dynamo_start entries");
+    assert!(
+        found_compilation_metrics || found_dynamo_start,
+        "Should find either compilation_metrics or dynamo_start entries"
+    );
 }
 
 #[test]

@@ -201,11 +201,18 @@ impl IntermediateWriter {
     }
 
     /// Write an entry to the appropriate intermediate file
-    pub fn write_entry(&mut self, entry: IntermediateEntry, file_type: IntermediateFileType) -> Result<()> {
+    pub fn write_entry(
+        &mut self,
+        entry: IntermediateEntry,
+        file_type: IntermediateFileType,
+    ) -> Result<()> {
         self.total_envelopes += 1;
 
         // Track envelope type counts
-        *self.envelope_counts.entry(entry.entry_type.clone()).or_insert(0) += 1;
+        *self
+            .envelope_counts
+            .entry(entry.entry_type.clone())
+            .or_insert(0) += 1;
 
         // Track compile IDs
         if let Some(ref cid) = entry.compile_id {
@@ -236,7 +243,10 @@ impl IntermediateWriter {
     /// Write a chromium event directly (for events that come as raw JSON)
     pub fn write_chromium_event(&mut self, event: Value) -> Result<()> {
         self.total_envelopes += 1;
-        *self.envelope_counts.entry("chromium_event".to_string()).or_insert(0) += 1;
+        *self
+            .envelope_counts
+            .entry("chromium_event".to_string())
+            .or_insert(0) += 1;
         self.chromium_events.push(event);
         Ok(())
     }
@@ -322,7 +332,10 @@ pub fn format_compile_id(compile_id: &Option<CompileId>) -> Option<String> {
         };
 
         let frame = cid.frame_id.map(|f| f.to_string()).unwrap_or_default();
-        let frame_compile = cid.frame_compile_id.map(|f| f.to_string()).unwrap_or_default();
+        let frame_compile = cid
+            .frame_compile_id
+            .map(|f| f.to_string())
+            .unwrap_or_default();
         let attempt = cid.attempt.map(|a| format!("_{}", a)).unwrap_or_default();
 
         format!("{}{}_{}{}", prefix, frame, frame_compile, attempt)
@@ -458,11 +471,13 @@ pub fn extract_metadata(e: &Envelope, envelope_type: &str) -> Value {
             serde_json::to_value(&e.bwd_compilation_metrics).unwrap_or(Value::Null)
         }
         "aot_autograd_backward_compilation_metrics" => {
-            serde_json::to_value(&e.aot_autograd_backward_compilation_metrics).unwrap_or(Value::Null)
+            serde_json::to_value(&e.aot_autograd_backward_compilation_metrics)
+                .unwrap_or(Value::Null)
         }
         "dynamo_start" => {
             // Include the stack in metadata
-            let mut metadata = serde_json::to_value(&e.dynamo_start).unwrap_or(Value::Object(Default::default()));
+            let mut metadata =
+                serde_json::to_value(&e.dynamo_start).unwrap_or(Value::Object(Default::default()));
             if let (Value::Object(ref mut map), Some(stack)) = (&mut metadata, &e.stack) {
                 if let Ok(stack_val) = serde_json::to_value(stack) {
                     map.insert("stack".to_string(), stack_val);
@@ -470,60 +485,44 @@ pub fn extract_metadata(e: &Envelope, envelope_type: &str) -> Value {
             }
             metadata
         }
-        "stack" => {
-            serde_json::to_value(&e.stack).unwrap_or(Value::Null)
-        }
-        "dynamo_guards" | "optimize_ddp_split_graph" | "compiled_autograd_graph"
-        | "aot_forward_graph" | "aot_backward_graph" | "aot_inference_graph"
-        | "aot_joint_graph" | "inductor_pre_grad_graph" | "inductor_post_grad_graph"
-        | "dynamo_cpp_guards_str" | "chromium_event" | "exported_program" => {
-            Value::Object(Default::default())
-        }
+        "stack" => serde_json::to_value(&e.stack).unwrap_or(Value::Null),
+        "dynamo_guards"
+        | "optimize_ddp_split_graph"
+        | "compiled_autograd_graph"
+        | "aot_forward_graph"
+        | "aot_backward_graph"
+        | "aot_inference_graph"
+        | "aot_joint_graph"
+        | "inductor_pre_grad_graph"
+        | "inductor_post_grad_graph"
+        | "dynamo_cpp_guards_str"
+        | "chromium_event"
+        | "exported_program" => Value::Object(Default::default()),
         "optimize_ddp_split_child" => {
             serde_json::to_value(&e.optimize_ddp_split_child).unwrap_or(Value::Null)
         }
-        "graph_dump" => {
-            serde_json::to_value(&e.graph_dump).unwrap_or(Value::Null)
-        }
+        "graph_dump" => serde_json::to_value(&e.graph_dump).unwrap_or(Value::Null),
         "inductor_output_code" => {
             serde_json::to_value(&e.inductor_output_code).unwrap_or(Value::Null)
         }
         "symbolic_shape_specialization" => {
             serde_json::to_value(&e.symbolic_shape_specialization).unwrap_or(Value::Null)
         }
-        "guard_added_fast" => {
-            serde_json::to_value(&e.guard_added_fast).unwrap_or(Value::Null)
-        }
+        "guard_added_fast" => serde_json::to_value(&e.guard_added_fast).unwrap_or(Value::Null),
         "propagate_real_tensors_provenance" => {
             serde_json::to_value(&e.propagate_real_tensors_provenance).unwrap_or(Value::Null)
         }
-        "guard_added" => {
-            serde_json::to_value(&e.guard_added).unwrap_or(Value::Null)
-        }
+        "guard_added" => serde_json::to_value(&e.guard_added).unwrap_or(Value::Null),
         "create_unbacked_symbol" => {
             serde_json::to_value(&e.create_unbacked_symbol).unwrap_or(Value::Null)
         }
-        "expression_created" => {
-            serde_json::to_value(&e.expression_created).unwrap_or(Value::Null)
-        }
-        "artifact" => {
-            serde_json::to_value(&e.artifact).unwrap_or(Value::Null)
-        }
-        "dump_file" => {
-            serde_json::to_value(&e.dump_file).unwrap_or(Value::Null)
-        }
-        "link" => {
-            serde_json::to_value(&e.link).unwrap_or(Value::Null)
-        }
-        "describe_tensor" => {
-            serde_json::to_value(&e.describe_tensor).unwrap_or(Value::Null)
-        }
-        "describe_storage" => {
-            serde_json::to_value(&e.describe_storage).unwrap_or(Value::Null)
-        }
-        "describe_source" => {
-            serde_json::to_value(&e.describe_source).unwrap_or(Value::Null)
-        }
+        "expression_created" => serde_json::to_value(&e.expression_created).unwrap_or(Value::Null),
+        "artifact" => serde_json::to_value(&e.artifact).unwrap_or(Value::Null),
+        "dump_file" => serde_json::to_value(&e.dump_file).unwrap_or(Value::Null),
+        "link" => serde_json::to_value(&e.link).unwrap_or(Value::Null),
+        "describe_tensor" => serde_json::to_value(&e.describe_tensor).unwrap_or(Value::Null),
+        "describe_storage" => serde_json::to_value(&e.describe_storage).unwrap_or(Value::Null),
+        "describe_source" => serde_json::to_value(&e.describe_source).unwrap_or(Value::Null),
         "missing_fake_kernel" => {
             serde_json::to_value(&e.missing_fake_kernel).unwrap_or(Value::Null)
         }
@@ -612,7 +611,10 @@ mod tests {
         let manifest = writer.finalize("test.log", "normal", 0)?;
 
         assert_eq!(manifest.total_envelopes, 2);
-        assert_eq!(manifest.envelope_counts.get("dynamo_output_graph"), Some(&1));
+        assert_eq!(
+            manifest.envelope_counts.get("dynamo_output_graph"),
+            Some(&1)
+        );
         assert_eq!(manifest.envelope_counts.get("chromium_event"), Some(&1));
         assert!(manifest.compile_ids.contains(&"0_0_0".to_string()));
 
