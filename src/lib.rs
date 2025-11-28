@@ -21,6 +21,7 @@ use crate::parsers::StructuredLogParser;
 use crate::templates::*;
 use crate::types::*;
 pub mod intermediate;
+pub mod modules;
 pub mod parsers;
 mod templates;
 mod types;
@@ -33,6 +34,11 @@ pub use types::{
 
 pub use intermediate::{
     IntermediateEntry, IntermediateFileType, IntermediateManifest, IntermediateWriter,
+};
+
+pub use modules::{
+    CombinedOutput, DirectoryEntry, IndexContribution, Module, ModuleConfig, ModuleOutput,
+    ModuleRegistry,
 };
 
 pub use execution_order::{
@@ -2746,4 +2752,38 @@ pub mod execution_order {
         }
         Ok(out)
     }
+}
+
+/// Render outputs from intermediate files using the module system.
+///
+/// This is the second stage of the two-stage architecture:
+/// 1. parse_path() / generate_intermediate_files() - Parse logs into intermediate JSONL files
+/// 2. render_from_intermediate() - Use modules to transform intermediate files into outputs
+///
+/// Returns a ParseOutput (Vec<(PathBuf, String)>) of files to write.
+pub fn render_from_intermediate(
+    intermediate_dir: &Path,
+    output_dir: &Path,
+    config: &ModuleConfig,
+) -> anyhow::Result<ParseOutput> {
+    // Load manifest
+    let manifest_path = intermediate_dir.join("manifest.json");
+    let manifest_file = File::open(&manifest_path)
+        .map_err(|e| anyhow!("Failed to open manifest at {}: {}", manifest_path.display(), e))?;
+    let manifest: IntermediateManifest = serde_json::from_reader(manifest_file)
+        .map_err(|e| anyhow!("Failed to parse manifest: {}", e))?;
+
+    // Create context for modules
+    let ctx = modules::context::ModuleContext::new(intermediate_dir, output_dir, &manifest, config);
+
+    // Create registry with default modules
+    let registry = ModuleRegistry::with_defaults(config);
+
+    // Render all modules
+    let combined = registry.render_all(&ctx)?;
+
+    // Convert CombinedOutput to ParseOutput
+    let output: ParseOutput = combined.files;
+
+    Ok(output)
 }
