@@ -1,4 +1,4 @@
-# Sub-Issue #12: MultiRankModule Implementation
+# Sub-Issue #11: MultiRankModule Implementation
 
 ## Summary
 Handle multi-rank analysis for distributed training scenarios. This module remains eager due to the complexity of cross-rank comparisons.

@@ -1,62 +1,51 @@
 # Sub-Issue #1: Core Module Infrastructure
 
 ## Summary
-Implement the core infrastructure for the module system including traits, context, and registry.
+Implement the core infrastructure for the module system. A module is simply a mapping from subscribed intermediate JSONL files to output files.
 
 ## Tasks
 
 ### 1.1 Create `src/modules/mod.rs`
-- Define `Module` trait with `name()`, `id()`, `subscriptions()`, `loading_strategy()`, `render()`
-- Define `LoadingStrategy` enum (Eager, Lazy, Hybrid)
+- Define `Module` trait with `name()`, `id()`, `subscriptions()`, `render()`
 - Define `ModuleContext` struct
 - Define `ModuleOutput` struct
 
 ### 1.2 Create `src/modules/registry.rs`
 - Implement `ModuleRegistry` for managing available modules
 - Implement `default()` and `export_mode()` factory methods
-- Add module discovery and filtering by loading strategy
 
-### 1.3 Create `src/modules/output.rs`
-- Define `DirectoryEntry`, `IndexEntry`, `IndexSection`, `IndexContent`
-- Implement output aggregation from multiple modules
-- Handle conflict resolution for overlapping outputs
-
-### 1.4 Create `src/modules/context.rs`
-- Implement JSONL streaming reader for intermediate files
-- Add caching layer for frequently accessed data
+### 1.3 Create `src/modules/context.rs`
+- Implement JSONL reader for intermediate files
 - Provide helper methods for common queries (e.g., `get_by_compile_id`)
 
-### 1.5 Update `lib.rs`
+### 1.4 Update `lib.rs`
 - Add module system integration point
 - Implement `render_with_modules()` function
-- Add module execution orchestration (eager first, then lazy-capable)
 
-### 1.6 Update `cli.rs`
+### 1.5 Update `cli.rs`
 - Add `--modules` flag to specify which modules to run
 - Add `--skip-modules` flag to exclude modules
-- Add `--list-modules` flag to list available modules
 
 ## API Design
 
 ```rust
 // src/modules/mod.rs
 pub mod registry;
-pub mod output;
 pub mod context;
 
+/// A module transforms intermediate JSONL files into output files
 pub trait Module: Send + Sync {
+    /// Human-readable name
     fn name(&self) -> &'static str;
-    fn id(&self) -> &'static str;
-    fn subscriptions(&self) -> &[IntermediateFileType];
-    fn loading_strategy(&self) -> LoadingStrategy;
-    fn render(&self, ctx: &ModuleContext) -> anyhow::Result<ModuleOutput>;
-}
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LoadingStrategy {
-    Eager,
-    Lazy,
-    Hybrid,
+    /// Short identifier used in file names
+    fn id(&self) -> &'static str;
+
+    /// Which intermediate files this module reads from
+    fn subscriptions(&self) -> &[IntermediateFileType];
+
+    /// Generate outputs from intermediate data
+    fn render(&self, ctx: &ModuleContext) -> anyhow::Result<ModuleOutput>;
 }
 
 // src/modules/context.rs
@@ -71,10 +60,10 @@ impl ModuleContext<'_> {
     /// Read and parse a JSONL intermediate file
     pub fn read_jsonl(&self, file_type: IntermediateFileType) -> anyhow::Result<Vec<IntermediateEntry>> {
         let path = self.intermediate_dir.join(file_type.filename());
-        // ... streaming JSONL parser
+        // ... JSONL parser
     }
 
-    /// Get entries from a file filtered by compile_id
+    /// Get entries filtered by compile_id
     pub fn get_entries_for_compile(
         &self,
         file_type: IntermediateFileType,
@@ -85,87 +74,107 @@ impl ModuleContext<'_> {
 }
 
 pub struct ModuleConfig {
-    pub plain_text: bool,           // Output plain text instead of HTML
-    pub custom_header_html: String, // Custom header for index page
-    pub export_mode: bool,          // Export mode active
-    pub inductor_provenance: bool,  // Provenance tracking enabled
+    pub plain_text: bool,
+    pub custom_header_html: String,
+    pub export_mode: bool,
 }
 
 // src/modules/output.rs
 pub struct ModuleOutput {
+    /// Files to write (relative path -> content)
     pub files: Vec<(PathBuf, String)>,
+    /// Entries to add to compile directory (compile_id -> entries)
     pub directory_entries: HashMap<String, Vec<DirectoryEntry>>,
-    pub index_entries: Vec<IndexEntry>,
-    pub lazy_scripts: Vec<PathBuf>,
+    /// Content to add to index.html
+    pub index_html: Option<IndexContribution>,
 }
 
 pub struct DirectoryEntry {
     pub name: String,
     pub url: String,
-    pub lazy_loader: Option<String>,
-    pub suffix: String,                    // For status indicators (✅/❌/❓)
-    pub cache_status: Option<CacheStatus>, // Cache hit/miss/bypass
+    pub suffix: String,  // For status indicators like ✅/❌/❓
 }
 
-pub struct IndexEntry {
-    pub section: IndexSection,
-    pub title: String,
-    pub content: IndexContent,
+pub struct IndexContribution {
+    /// Section name (e.g., "Stack Trie", "Diagnostics")
+    pub section: String,
+    /// HTML content to insert
+    pub html: String,
+}
+```
+
+## Module Registry
+
+```rust
+pub struct ModuleRegistry {
+    modules: Vec<Box<dyn Module>>,
 }
 
-pub enum IndexSection {
-    StackTrie,
-    Diagnostics,
-    CompileDirectory,
-    Downloads,
-    Custom(String),
-}
+impl ModuleRegistry {
+    pub fn default() -> Self {
+        Self {
+            modules: vec![
+                Box::new(StackTrieModule::new()),
+                Box::new(CompileDirectoryModule::new()),
+                Box::new(CompileArtifactsModule::new()),
+                Box::new(CacheModule::new()),
+                Box::new(CompilationMetricsModule::new()),
+                Box::new(GuardsModule::new()),
+                Box::new(SymbolicShapesModule::new()),
+                Box::new(ChromiumTraceModule::new()),
+            ],
+        }
+    }
 
-pub enum IndexContent {
-    Html(String),
-    Link(String),
-    Lazy { container_id: String, loader: String },
-    Hybrid { summary_html: String, detail_url: String },
-}
+    pub fn export_mode() -> Self {
+        Self {
+            modules: vec![
+                Box::new(ExportModule::new()),
+                Box::new(SymbolicShapesModule::new()),
+            ],
+        }
+    }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CacheStatus {
-    Hit,
-    Miss,
-    Bypass,
+    pub fn render_all(&self, ctx: &ModuleContext) -> anyhow::Result<CombinedOutput> {
+        let mut combined = CombinedOutput::default();
+        for module in &self.modules {
+            let output = module.render(ctx)?;
+            combined.merge(output);
+        }
+        Ok(combined)
+    }
 }
 ```
 
 ## Utility Functions
 
-Define shared utility functions in `src/modules/utils.rs`:
+Shared utilities in `src/modules/utils.rs`:
 
 ```rust
-/// Highlight Python code using syntect
 pub fn highlight_python(code: &str) -> anyhow::Result<String>;
-
-/// Pretty-print JSON with indentation
 pub fn format_json_pretty(json_str: &str) -> anyhow::Result<String>;
-
-/// Wrap source code in HTML with line anchors
 pub fn anchor_source(text: &str) -> String;
-
-/// Extract eval_with_key ID from filename
-pub fn extract_eval_with_key_id(name: &str) -> Option<&str>;
-
-/// Format a stack trace as collapsible HTML
 pub fn format_stack(stack: &StackSummary, caption: &str, open: bool) -> String;
 ```
 
 ## Acceptance Criteria
-- [ ] Module trait is implemented and documented
-- [ ] Registry can load and filter modules
-- [ ] Context provides efficient JSONL access
-- [ ] CLI flags are working
-- [ ] At least one test module demonstrates the pattern
+- [ ] Module trait is implemented
+- [ ] Registry can run all modules
+- [ ] Context provides JSONL access
+- [ ] At least one module works end-to-end
+
+## Notes on Future Lazy Loading
+Lazy loading can be added later as an optional trait or wrapper:
+```rust
+// Future extension - not part of initial implementation
+pub trait LazyModule: Module {
+    fn client_script(&self) -> Option<&str>;
+    fn supports_lazy_load(&self) -> bool;
+}
+```
 
 ## Dependencies
 - Requires intermediate file generation (already implemented)
 
 ## Estimated Complexity
-Medium - This is foundational infrastructure that other modules depend on.
+Low-Medium - Simplified API makes this straightforward.
