@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use fxhash;
 use predicates::boolean::PredicateBooleanExt;
 use predicates::str;
 use std::collections::HashMap;
@@ -2630,4 +2631,394 @@ fn test_graph_execution_order_diagnostics() -> Result<(), Box<dyn std::error::Er
     assert!(!html_content.contains("Warning:</strong> Cache hit/miss mismatch across ranks"));
 
     Ok(())
+}
+
+// ============================================================================
+// Unit Tests for execution_order module
+// ============================================================================
+
+#[test]
+fn test_execution_order_empty_input() {
+    let exec_orders: fxhash::FxHashMap<u32, Vec<String>> = fxhash::FxHashMap::default();
+    let collective_schedule: fxhash::FxHashMap<(u32, String), Vec<String>> =
+        fxhash::FxHashMap::default();
+    let cache_status: fxhash::FxHashMap<(u32, String), String> = fxhash::FxHashMap::default();
+
+    let report =
+        tlparse::analyze_execution_order(&exec_orders, &collective_schedule, &cache_status);
+
+    assert!(report.by_index.is_empty());
+}
+
+#[test]
+fn test_execution_order_single_rank() {
+    let exec_orders: fxhash::FxHashMap<u32, Vec<String>> = vec![(
+        0_u32,
+        vec!["0/0".to_string(), "0/1".to_string(), "0/2".to_string()],
+    )]
+    .into_iter()
+    .collect();
+
+    let collective_schedule: fxhash::FxHashMap<(u32, String), Vec<String>> =
+        fxhash::FxHashMap::default();
+    let cache_status: fxhash::FxHashMap<(u32, String), String> = fxhash::FxHashMap::default();
+
+    let report =
+        tlparse::analyze_execution_order(&exec_orders, &collective_schedule, &cache_status);
+
+    // Single rank should have 3 rows with no issues
+    assert_eq!(report.by_index.len(), 3);
+    for row in &report.by_index {
+        assert!(row.issues.is_empty());
+        assert_eq!(row.by_rank.len(), 1);
+    }
+}
+
+#[test]
+fn test_execution_order_identical_ranks() {
+    let exec_orders: fxhash::FxHashMap<u32, Vec<String>> = vec![
+        (0_u32, vec!["A".to_string(), "B".to_string()]),
+        (1_u32, vec!["A".to_string(), "B".to_string()]),
+        (2_u32, vec!["A".to_string(), "B".to_string()]),
+    ]
+    .into_iter()
+    .collect();
+
+    let collective_schedule: fxhash::FxHashMap<(u32, String), Vec<String>> = vec![
+        ((0_u32, "A".to_string()), vec!["op1".to_string()]),
+        ((1_u32, "A".to_string()), vec!["op1".to_string()]),
+        ((2_u32, "A".to_string()), vec!["op1".to_string()]),
+    ]
+    .into_iter()
+    .collect();
+
+    let cache_status: fxhash::FxHashMap<(u32, String), String> = vec![
+        ((0_u32, "A".to_string()), "hit".to_string()),
+        ((1_u32, "A".to_string()), "hit".to_string()),
+        ((2_u32, "A".to_string()), "hit".to_string()),
+    ]
+    .into_iter()
+    .collect();
+
+    let report =
+        tlparse::analyze_execution_order(&exec_orders, &collective_schedule, &cache_status);
+
+    assert_eq!(report.by_index.len(), 2);
+    for row in &report.by_index {
+        assert!(row.issues.is_empty(), "No issues expected for identical ranks");
+    }
+}
+
+#[test]
+fn test_execution_order_uneven_lengths() {
+    // Ranks with different number of executions
+    let exec_orders: fxhash::FxHashMap<u32, Vec<String>> = vec![
+        (0_u32, vec!["A".to_string(), "B".to_string(), "C".to_string()]),
+        (1_u32, vec!["A".to_string()]), // Shorter
+    ]
+    .into_iter()
+    .collect();
+
+    let collective_schedule: fxhash::FxHashMap<(u32, String), Vec<String>> =
+        fxhash::FxHashMap::default();
+    let cache_status: fxhash::FxHashMap<(u32, String), String> = fxhash::FxHashMap::default();
+
+    let report =
+        tlparse::analyze_execution_order(&exec_orders, &collective_schedule, &cache_status);
+
+    // Should have 3 rows (max length)
+    assert_eq!(report.by_index.len(), 3);
+
+    // First row has both ranks
+    assert_eq!(report.by_index[0].by_rank.len(), 2);
+
+    // Last two rows only have rank 0
+    assert_eq!(report.by_index[1].by_rank.len(), 1);
+    assert_eq!(report.by_index[2].by_rank.len(), 1);
+}
+
+#[test]
+fn test_parse_graph_execution_order_valid() {
+    let payload = r#"{"graph_execution_order": ["0/0", "0/1", "1/0"]}"#;
+    let result = tlparse::parse_graph_execution_order(payload).unwrap();
+    assert_eq!(result, vec!["0/0", "0/1", "1/0"]);
+}
+
+#[test]
+fn test_parse_graph_execution_order_with_objects() {
+    let payload = r#"{"graph_execution_order": [{"compile_id": "0/0"}, {"compile_id": "0/1"}]}"#;
+    let result = tlparse::parse_graph_execution_order(payload).unwrap();
+    assert_eq!(result, vec!["0/0", "0/1"]);
+}
+
+#[test]
+fn test_parse_graph_execution_order_missing_field() {
+    let payload = r#"{"other_field": []}"#;
+    let result = tlparse::parse_graph_execution_order(payload);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_parse_graph_execution_order_invalid_json() {
+    let payload = "not valid json";
+    let result = tlparse::parse_graph_execution_order(payload);
+    assert!(result.is_err());
+}
+
+// ============================================================================
+// Edge case tests for parsing
+// ============================================================================
+
+#[test]
+fn test_parse_empty_log_file() {
+    // Create a temporary empty log file
+    let temp_dir = tempdir().unwrap();
+    let empty_log = temp_dir.path().join("empty.log");
+    fs::write(&empty_log, "").unwrap();
+
+    let config = tlparse::ParseConfig {
+        strict: false,
+        ..Default::default()
+    };
+    let output = tlparse::parse_path(&empty_log, &config);
+    assert!(output.is_ok());
+
+    let files: HashMap<PathBuf, String> = output.unwrap().into_iter().collect();
+    // Should still generate index.html and basic structure
+    assert!(files.contains_key(&PathBuf::from("index.html")));
+}
+
+#[test]
+fn test_parse_log_with_only_string_table() {
+    let temp_dir = tempdir().unwrap();
+    let log_path = temp_dir.path().join("string_table_only.log");
+
+    // Write a log with only a string table entry
+    let content = r#"{"str": {"id": 1, "value": "test_string"}}"#;
+    fs::write(&log_path, content).unwrap();
+
+    let config = tlparse::ParseConfig {
+        strict: false,
+        ..Default::default()
+    };
+    let output = tlparse::parse_path(&log_path, &config);
+    assert!(output.is_ok());
+}
+
+#[test]
+fn test_parse_log_with_invalid_json_lines() {
+    let temp_dir = tempdir().unwrap();
+    let log_path = temp_dir.path().join("mixed.log");
+
+    // Mix of valid and invalid JSON lines
+    let content = "not json at all\n{\"str\": {\"id\": 1, \"value\": \"test\"}}\nanother invalid line";
+    fs::write(&log_path, content).unwrap();
+
+    let config = tlparse::ParseConfig {
+        strict: false,
+        ..Default::default()
+    };
+    let output = tlparse::parse_path(&log_path, &config);
+    // Non-strict mode should succeed
+    assert!(output.is_ok());
+}
+
+#[test]
+fn test_parse_log_strict_mode_with_invalid_json() {
+    let temp_dir = tempdir().unwrap();
+    let log_path = temp_dir.path().join("invalid.log");
+
+    let content = "this is not valid json";
+    fs::write(&log_path, content).unwrap();
+
+    let config = tlparse::ParseConfig {
+        strict: true,
+        ..Default::default()
+    };
+    let output = tlparse::parse_path(&log_path, &config);
+    // Strict mode should fail on invalid JSON
+    assert!(output.is_err());
+}
+
+// ============================================================================
+// CLI edge case tests
+// ============================================================================
+
+#[test]
+fn test_cli_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("tlparse")?;
+    cmd.arg("/nonexistent/path/to/file.log");
+
+    cmd.assert().failure();
+    Ok(())
+}
+
+#[test]
+fn test_cli_help_flag() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("tlparse")?;
+    cmd.arg("--help");
+
+    cmd.assert()
+        .success()
+        .stdout(str::contains("Parse TORCH_LOG logs"));
+    Ok(())
+}
+
+#[test]
+fn test_cli_version_flag() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("tlparse")?;
+    cmd.arg("--version");
+
+    cmd.assert().success().stdout(str::contains("tlparse"));
+    Ok(())
+}
+
+#[test]
+fn test_cli_conflicting_flags() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let log_path = temp_dir.path().join("test.log");
+    fs::write(&log_path, "")?;
+
+    let mut cmd = Command::cargo_bin("tlparse")?;
+    cmd.arg(&log_path)
+        .arg("--export")
+        .arg("--inductor-provenance"); // These might conflict
+
+    // Command should run (flags may be orthogonal)
+    cmd.assert();
+    Ok(())
+}
+
+// ============================================================================
+// Multi-rank edge case tests
+// ============================================================================
+
+#[test]
+fn test_all_ranks_single_rank() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_in = tempdir()?;
+    let temp_out = tempdir()?;
+
+    // Create single rank log
+    fs::copy(
+        "tests/inputs/simple.log",
+        temp_in.path().join("dedicated_log_torch_trace_rank_0.log"),
+    )?;
+
+    let mut cmd = Command::cargo_bin("tlparse")?;
+    cmd.arg(temp_in.path())
+        .arg("--all-ranks-html")
+        .arg("--overwrite")
+        .arg("-o")
+        .arg(temp_out.path())
+        .arg("--no-browser");
+
+    cmd.assert().success();
+
+    // Should still create multi-rank structure with 1 rank
+    let landing_page = temp_out.path().join("index.html");
+    assert!(landing_page.exists());
+    let content = fs::read_to_string(&landing_page)?;
+    assert!(content.contains("1</strong> rank"));
+
+    Ok(())
+}
+
+#[test]
+fn test_all_ranks_sparse_rank_numbers() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_in = tempdir()?;
+    let temp_out = tempdir()?;
+
+    // Create logs with non-contiguous rank numbers (0, 5, 10)
+    for rank in [0, 5, 10] {
+        fs::copy(
+            "tests/inputs/simple.log",
+            temp_in
+                .path()
+                .join(format!("dedicated_log_torch_trace_rank_{}.log", rank)),
+        )?;
+    }
+
+    let mut cmd = Command::cargo_bin("tlparse")?;
+    cmd.arg(temp_in.path())
+        .arg("--all-ranks-html")
+        .arg("--overwrite")
+        .arg("-o")
+        .arg(temp_out.path())
+        .arg("--no-browser");
+
+    cmd.assert().success();
+
+    // Should handle sparse ranks correctly
+    assert!(temp_out.path().join("rank_0/index.html").exists());
+    assert!(temp_out.path().join("rank_5/index.html").exists());
+    assert!(temp_out.path().join("rank_10/index.html").exists());
+    assert!(!temp_out.path().join("rank_1/index.html").exists());
+
+    Ok(())
+}
+
+// ============================================================================
+// Compile directory structure tests
+// ============================================================================
+
+#[test]
+fn test_compile_directory_json_structure() {
+    let path = Path::new("tests/inputs/simple.log").to_path_buf();
+    let config = tlparse::ParseConfig {
+        strict: true,
+        ..Default::default()
+    };
+    let output = tlparse::parse_path(&path, &config);
+    assert!(output.is_ok());
+
+    let map: HashMap<PathBuf, String> = output.unwrap().into_iter().collect();
+    let compile_dir_json = map
+        .get(&PathBuf::from("compile_directory.json"))
+        .expect("compile_directory.json should exist");
+
+    let parsed: serde_json::Value = serde_json::from_str(compile_dir_json).unwrap();
+    assert!(parsed.is_object());
+
+    // Each compile ID should have a structured entry
+    for (_compile_id, entry) in parsed.as_object().unwrap() {
+        assert!(entry.is_object());
+        let obj = entry.as_object().unwrap();
+        // Should have artifacts array
+        assert!(obj.contains_key("artifacts"));
+        assert!(obj.get("artifacts").unwrap().is_array());
+    }
+}
+
+#[test]
+fn test_raw_jsonl_structure() {
+    let path = Path::new("tests/inputs/simple.log").to_path_buf();
+    let config = tlparse::ParseConfig {
+        strict: true,
+        ..Default::default()
+    };
+    let output = tlparse::parse_path(&path, &config);
+    assert!(output.is_ok());
+
+    let map: HashMap<PathBuf, String> = output.unwrap().into_iter().collect();
+    let raw_jsonl = map
+        .get(&PathBuf::from("raw.jsonl"))
+        .expect("raw.jsonl should exist");
+
+    // First line should be string table
+    let first_line = raw_jsonl.lines().next().unwrap();
+    let first_obj: serde_json::Value = serde_json::from_str(first_line).unwrap();
+    assert!(
+        first_obj.get("string_table").is_some(),
+        "First line should contain string_table"
+    );
+
+    // Subsequent lines should be valid JSON with expected fields
+    for line in raw_jsonl.lines().skip(1) {
+        let obj: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(obj.is_object());
+        // Should have timestamp and thread for log entries
+        if obj.get("timestamp").is_some() {
+            assert!(obj.get("thread").is_some());
+        }
+    }
 }
