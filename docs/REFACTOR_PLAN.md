@@ -58,11 +58,9 @@ PyTorch Structured Logs (.log)
     ├── manifest.json              # Index of all generated files
     ├── string_table.json          # Interned strings
     ├── raw.jsonl                  # All envelopes (minus chromium)
-    ├── payloads/                  # Large payload files
-    │   └── {md5_hash}.txt
     │
     ├── by_type/                   # Envelopes organized by type
-    │   ├── dynamo_output_graph.jsonl
+    │   ├── dynamo_output_graph.jsonl    # Payloads inlined
     │   ├── compilation_metrics.jsonl
     │   ├── chromium_events.json
     │   ├── dynamo_guards.jsonl
@@ -85,6 +83,14 @@ PyTorch Structured Logs (.log)
         └── ... HTML artifacts
 ```
 
+**Key Design Decision: Inlined Payloads**
+
+Payloads (graph dumps, generated code, etc.) are stored directly in the JSONL entries rather than as separate files. This works well because:
+1. Files are already split by type, so each JSONL file's payloads are naturally bounded
+2. Self-contained files are easier to understand and debug
+3. No need to manage cross-references between files
+4. Simpler for external tools to consume
+
 ---
 
 ## Stage 1: Intermediate JSON File Design
@@ -96,12 +102,10 @@ intermediate/
 ├── manifest.json                    # Master index
 ├── string_table.json                # Filename interning
 ├── raw.jsonl                        # Complete log (minus chromium, str)
-├── payloads/
-│   └── {md5}.txt                    # Payload files
 │
 ├── by_type/
 │   │
-│   │ # Graph Outputs (payload-based)
+│   │ # Graph Outputs (payloads inlined)
 │   ├── dynamo_output_graph.jsonl
 │   ├── optimize_ddp_split_graph.jsonl
 │   ├── optimize_ddp_split_child.jsonl
@@ -182,7 +186,6 @@ intermediate/
     ...
   },
   "compile_ids": ["0_0_0", "0_0_1", "0_1_0", ...],
-  "has_payload_files": true,
   "string_table_entries": 150,
   "parse_mode": "normal",  // or "export", "multi_rank"
   "ranks": [0],            // list of ranks if multi_rank
@@ -195,7 +198,7 @@ intermediate/
 
 #### Individual JSONL Entry Format (by_type/*.jsonl)
 ```jsonl
-{"compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":42,"metadata":{"sizes":{"L['x']":[[2,3],[3,4]]}},"payload_file":"payloads/abc123.txt"}
+{"compile_id":"0_0_0","rank":0,"timestamp":"2024-11-28T12:00:00Z","thread":12345,"pathname":"torch/_dynamo/convert_frame.py","lineno":42,"metadata":{"sizes":{"L['x']":[[2,3],[3,4]]}},"payload":"def forward(self, x):\n    return x + 1"}
 {"compile_id":"0_0_1",...}
 ```
 
@@ -207,7 +210,7 @@ Each entry includes:
 - `pathname`: Source file (interned ID or full path)
 - `lineno`: Line number
 - `metadata`: Type-specific metadata object
-- `payload_file`: Path to payload file (if applicable)
+- `payload`: Inlined payload content (if applicable, as string)
 
 #### `by_compile_id/{id}/summary.json`
 ```json
@@ -232,7 +235,7 @@ Each entry includes:
 #### `by_compile_id/{id}/events.jsonl`
 ```jsonl
 {"type":"dynamo_start","timestamp":"...","metadata":{...}}
-{"type":"dynamo_output_graph","timestamp":"...","metadata":{...},"payload_file":"..."}
+{"type":"dynamo_output_graph","timestamp":"...","metadata":{...},"payload":"def forward(...):\n    ..."}
 {"type":"compilation_metrics","timestamp":"...","metadata":{...}}
 ```
 
@@ -240,16 +243,16 @@ Each entry includes:
 
 | Category | Types | Output Behavior |
 |----------|-------|-----------------|
-| **Graph Outputs** | dynamo_output_graph, optimize_ddp_*, compiled_autograd_graph, aot_*, inductor_*_grad_graph, graph_dump | Has payload file |
-| **Code Generation** | inductor_output_code, dynamo_cpp_guards_str | Has payload file |
+| **Graph Outputs** | dynamo_output_graph, optimize_ddp_*, compiled_autograd_graph, aot_*, inductor_*_grad_graph, graph_dump | Payload inlined |
+| **Code Generation** | inductor_output_code, dynamo_cpp_guards_str | Payload inlined |
 | **Guards** | dynamo_guards, symbolic_shape_specialization, guard_added_fast | Metadata only |
 | **Metrics** | compilation_metrics, bwd_compilation_metrics, aot_autograd_backward_compilation_metrics | Metadata only (rich) |
 | **Stack Traces** | dynamo_start | Stack in metadata |
 | **Symbolic Shapes** | propagate_real_tensors_provenance, guard_added, create_unbacked_symbol, expression_created | Metadata with trees |
 | **Events** | chromium_event | Special: array format JSON |
-| **Artifacts** | artifact, dump_file, link | Has payload or URL |
+| **Artifacts** | artifact, dump_file, link | Payload inlined or URL |
 | **Tensor Metadata** | describe_tensor, describe_storage, describe_source | Metadata only |
-| **Export** | missing_fake_kernel, mismatched_fake_kernel, exported_program | Metadata or payload |
+| **Export** | missing_fake_kernel, mismatched_fake_kernel, exported_program | Metadata or payload inlined |
 
 ---
 
@@ -281,7 +284,6 @@ pub enum IntermediateFile {
     ByCompileId,                    // Access to by_compile_id/
     Manifest,                       // manifest.json
     StringTable,                    // string_table.json
-    Payloads,                       // payloads/ directory
     Raw,                            // raw.jsonl
 }
 
@@ -302,8 +304,8 @@ pub struct ModuleOutput {
 |--------|-----------------|---------|
 | `IndexModule` | manifest, by_compile_id, compilation_metrics, dynamo_start | index.html |
 | `CompileDirectoryModule` | manifest, by_compile_id | compile_directory.json |
-| `GraphViewerModule` | dynamo_output_graph, aot_*, inductor_*_graph, graph_dump, payloads | {id}/*.txt files |
-| `InductorCodeModule` | inductor_output_code, payloads | {id}/inductor_output_code.html |
+| `GraphViewerModule` | dynamo_output_graph, aot_*, inductor_*_graph, graph_dump | {id}/*.txt files |
+| `InductorCodeModule` | inductor_output_code | {id}/inductor_output_code.html |
 | `CompilationMetricsModule` | compilation_metrics, symbolic_shape_specialization, guard_added_fast, dynamo_start | {id}/compilation_metrics.html |
 | `FailuresModule` | compilation_metrics | failures_and_restarts.html |
 | `GuardsModule` | dynamo_guards | {id}/dynamo_guards.html |
@@ -435,7 +437,7 @@ tlparse <input.log> -o <output_dir>
       "L['y']": [[4, 5]]
     }
   },
-  "payload_file": "payloads/a1b2c3d4.txt"
+  "payload": "class GraphModule(torch.nn.Module):\n    def forward(self, L_x_ : torch.Tensor):\n        l_x_ = L_x_\n        add = l_x_ + 1\n        return (add,)"
 }
 ```
 
@@ -572,20 +574,20 @@ tlparse <input.log> -o <output_dir>
 
 ## Open Questions
 
-1. **Payload Storage**: Should payloads remain as separate files, or be base64-encoded in JSONL for portability?
-   - **Recommendation**: Keep separate files for large payloads (>1KB), inline small ones
-
-2. **Compression**: Should intermediate files be compressed (gzip)?
+1. **Compression**: Should intermediate files be compressed (gzip)?
    - **Recommendation**: Not by default, but support `.jsonl.gz` extension
 
-3. **Incremental Updates**: Should we support appending to intermediate files?
+2. **Incremental Updates**: Should we support appending to intermediate files?
    - **Recommendation**: Not in v1, but design schema to allow it later
 
-4. **External Schema Publishing**: Should we publish JSON schemas to a separate repo?
+3. **External Schema Publishing**: Should we publish JSON schemas to a separate repo?
    - **Recommendation**: Start with in-repo docs, consider later
 
-5. **Python Bindings**: How do Python bindings interact with new architecture?
+4. **Python Bindings**: How do Python bindings interact with new architecture?
    - **Recommendation**: Python API exposes both `parse()` and `render()` functions
+
+5. **Backward Compatibility for raw.jsonl**: Should we keep generating `payloads/` directory for raw.jsonl compatibility?
+   - **Recommendation**: Yes, raw.jsonl continues to use payload_file references for backward compat, but by_type files use inlined payloads
 
 ---
 
@@ -594,30 +596,30 @@ tlparse <input.log> -o <output_dir>
 1. ✅ All existing tests pass with new architecture
 2. ✅ `tlparse <input> -o <output>` produces identical outputs
 3. ✅ New module can be added by implementing trait + registering
-4. ✅ External tool can consume intermediate JSON files
+4. ✅ External tool can consume intermediate JSON files (self-contained with inlined payloads)
 5. ✅ Performance regression < 10% for typical workloads
-6. ✅ Intermediate file size < 2x raw log size
+6. ✅ Intermediate file size reasonable (some duplication acceptable for self-containment)
 
 ---
 
 ## Appendix: Complete Envelope Type Inventory
 
-| # | Envelope Type | Category | Has Payload | Has Metadata | Current Parser |
-|---|---------------|----------|-------------|--------------|----------------|
-| 1 | dynamo_output_graph | Graph | ✓ | ✓ (sizes) | DynamoOutputGraphParser |
-| 2 | optimize_ddp_split_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 3 | optimize_ddp_split_child | Graph | ✓ | ✓ (name) | OptimizeDdpSplitChildParser |
-| 4 | compiled_autograd_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 5 | aot_forward_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 6 | aot_backward_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 7 | aot_inference_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 8 | aot_joint_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 9 | inductor_pre_grad_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 10 | inductor_post_grad_graph | Graph | ✓ | ✗ | SentinelFileParser |
-| 11 | graph_dump | Graph | ✓ | ✓ (name) | GraphDumpParser |
-| 12 | inductor_output_code | Code | ✓ | ✓ (filename) | InductorOutputCodeParser |
-| 13 | dynamo_cpp_guards_str | Code | ✓ | ✗ | SentinelFileParser |
-| 14 | dynamo_guards | Guards | ✓ | ✗ | DynamoGuardParser |
+| # | Envelope Type | Category | Payload | Metadata | Current Parser |
+|---|---------------|----------|---------|----------|----------------|
+| 1 | dynamo_output_graph | Graph | inlined | ✓ (sizes) | DynamoOutputGraphParser |
+| 2 | optimize_ddp_split_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 3 | optimize_ddp_split_child | Graph | inlined | ✓ (name) | OptimizeDdpSplitChildParser |
+| 4 | compiled_autograd_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 5 | aot_forward_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 6 | aot_backward_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 7 | aot_inference_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 8 | aot_joint_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 9 | inductor_pre_grad_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 10 | inductor_post_grad_graph | Graph | inlined | ✗ | SentinelFileParser |
+| 11 | graph_dump | Graph | inlined | ✓ (name) | GraphDumpParser |
+| 12 | inductor_output_code | Code | inlined | ✓ (filename) | InductorOutputCodeParser |
+| 13 | dynamo_cpp_guards_str | Code | inlined | ✗ | SentinelFileParser |
+| 14 | dynamo_guards | Guards | inlined | ✗ | DynamoGuardParser |
 | 15 | symbolic_shape_specialization | Guards | ✗ | ✓ | Index collector |
 | 16 | guard_added_fast | Guards | ✗ | ✓ | Index collector |
 | 17 | compilation_metrics | Metrics | ✗ | ✓ (rich) | CompilationMetricsParser |
@@ -628,16 +630,16 @@ tlparse <input.log> -o <output_dir>
 | 22 | guard_added | Symbolic | ✗ | ✓ | PropagateRealTensorsParser |
 | 23 | create_unbacked_symbol | Symbolic | ✗ | ✓ | Index collector |
 | 24 | expression_created | Symbolic | ✗ | ✓ | Index collector |
-| 25 | chromium_event | Events | ✓ (special) | ✗ | Special collector |
-| 26 | artifact | Artifact | ✓/✗ | ✓ (name, encoding) | ArtifactParser |
-| 27 | dump_file | Artifact | ✓ | ✓ (name) | DumpFileParser |
+| 25 | chromium_event | Events | special | ✗ | Special collector |
+| 26 | artifact | Artifact | inlined | ✓ (name, encoding) | ArtifactParser |
+| 27 | dump_file | Artifact | inlined | ✓ (name) | DumpFileParser |
 | 28 | link | Artifact | ✗ | ✓ (name, url) | LinkParser |
 | 29 | describe_tensor | Metadata | ✗ | ✓ | Collector (multi-rank) |
 | 30 | describe_storage | Metadata | ✗ | ✓ | Collector (multi-rank) |
 | 31 | describe_source | Metadata | ✗ | ✓ | Collector (multi-rank) |
 | 32 | missing_fake_kernel | Export | ✗ | ✓ | Export mode collector |
 | 33 | mismatched_fake_kernel | Export | ✗ | ✓ | Export mode collector |
-| 34 | exported_program | Export | ✓ | ✗ | SentinelFileParser |
+| 34 | exported_program | Export | inlined | ✗ | SentinelFileParser |
 | 35 | str | Internal | ✗ | ✓ | String table builder |
 | 36 | stack (toplevel) | Stack | ✗ | ✓ | Unknown stack trie |
 
