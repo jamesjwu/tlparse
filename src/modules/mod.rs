@@ -6,12 +6,28 @@
 //! This enables a clean separation between parsing and rendering, and opens the door
 //! for future lazy loading support.
 
+pub mod cache;
 pub mod chromium_trace;
+pub mod compilation_metrics;
 pub mod compile_artifacts;
+pub mod compile_directory;
 pub mod context;
+pub mod export;
+pub mod guards;
+pub mod index_generator;
+pub mod stack_trie;
+pub mod symbolic_shapes;
 
+pub use cache::CacheModule;
 pub use chromium_trace::ChromiumTraceModule;
+pub use compilation_metrics::CompilationMetricsModule;
 pub use compile_artifacts::CompileArtifactsModule;
+pub use compile_directory::CompileDirectoryModule;
+pub use export::ExportModule;
+pub use guards::GuardsModule;
+pub use index_generator::IndexGeneratorModule;
+pub use stack_trie::StackTrieModule;
+pub use symbolic_shapes::SymbolicShapesModule;
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -161,26 +177,29 @@ impl ModuleRegistry {
     pub fn with_defaults(config: &ModuleConfig) -> Self {
         let mut registry = Self::new();
 
-        // Add compile artifacts module (graphs, codegen, artifacts)
+        // Core modules for file output
         registry.register(Box::new(CompileArtifactsModule::new(config.plain_text)));
-
-        // Add chromium trace module
+        registry.register(Box::new(GuardsModule::new(config.plain_text)));
+        registry.register(Box::new(CacheModule::new()));
+        registry.register(Box::new(CompilationMetricsModule::new(config.plain_text)));
         registry.register(Box::new(ChromiumTraceModule::new()));
+        registry.register(Box::new(SymbolicShapesModule::new()));
 
-        // TODO: Add more modules as they are implemented:
-        // - StackTrieModule
-        // - CompilationMetricsModule
-        // - GuardsModule
-        // - CacheModule
-        // - SymbolicShapesModule
+        // Index page modules
+        registry.register(Box::new(StackTrieModule::new()));
+
+        // Directory/metadata modules
+        registry.register(Box::new(CompileDirectoryModule::new()));
 
         registry
     }
 
     /// Create a registry with modules for export mode
-    pub fn for_export_mode(_config: &ModuleConfig) -> Self {
-        let registry = Self::new();
-        // TODO: Add export-specific modules
+    pub fn for_export_mode(config: &ModuleConfig) -> Self {
+        let mut registry = Self::new();
+        // Export mode uses export-specific modules
+        registry.register(Box::new(ExportModule::new()));
+        registry.register(Box::new(SymbolicShapesModule::new()));
         registry
     }
 }
