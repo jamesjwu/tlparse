@@ -14,6 +14,7 @@ pub mod compile_directory;
 pub mod context;
 pub mod export;
 pub mod guards;
+pub mod index_generator;
 pub mod stack_trie;
 pub mod symbolic_shapes;
 
@@ -24,6 +25,7 @@ pub use compile_artifacts::CompileArtifactsModule;
 pub use compile_directory::CompileDirectoryModule;
 pub use export::ExportModule;
 pub use guards::GuardsModule;
+pub use index_generator::IndexGeneratorModule;
 pub use stack_trie::StackTrieModule;
 pub use symbolic_shapes::SymbolicShapesModule;
 
